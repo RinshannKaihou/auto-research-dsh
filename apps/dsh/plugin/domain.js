@@ -62,49 +62,81 @@ export class ResearchDomain {
     return this.request(agent, 'detach', {}, `${id}:detach`);
   }
 
-  async auto(agent, id) {
-    let state = await this.request(agent, 'query');
-    if (state.attempt?.mode === 'manual') {
-      const prior = state.attempt;
+  async ensureAutoAttempt(agent, state, id) {
+    if (state.attempt?.mode === 'auto') return state;
+    const prior = state.attempt;
+    if (prior) {
       await this.request(agent, 'finish', {
         state: 'finished', details: { reason: 'autonomous-mode-enabled' },
       }, `${id}:finish-manual`);
-      await this.request(agent, 'focus', {
-        node_id: prior.node_id,
-        role: prior.role,
-        mode: 'auto',
-      }, `${id}:focus-auto`);
-      state = await this.request(agent, 'query');
     }
+    await this.request(agent, 'focus', {
+      node_id: prior?.node_id ?? null,
+      role: prior?.role ?? 'researcher',
+      mode: 'auto',
+    }, `${id}:focus-auto`);
+    return this.request(agent, 'query');
+  }
+
+  async auto(agent, id) {
+    let state = await this.request(agent, 'query');
     const current = this.ctx.goals.get(agent);
     const owned = state.owned_goal;
     if (current && (!owned || current.id !== owned.goal_id) && current.phase !== 'complete') {
       throw new Error('This session already has a non-plugin native goal');
     }
+    state = await this.ensureAutoAttempt(agent, state, `${id}:attempt`);
     const objective = [
       `Advance research project: ${state.project.goal}`,
       'Use native DSH tools for the work and research_* tools for notes, snapshots, publications, relations, and work-segment completion.',
       'Continue within the current native session. Stop the goal when the research objective is met; do not infer publication or node closure from goal completion.',
     ].join('\n');
-    const goal = current?.phase === 'complete'
-      ? this.ctx.goals.create(agent, { objective, maxGoalRounds: this.maxGoalRounds })
-      : current ?? this.ctx.goals.create(agent, { objective, maxGoalRounds: this.maxGoalRounds });
-    await this.request(agent, 'own_goal', {
-      goal_id: goal.id,
-      revision: goal.revision,
-      phase: goal.phase,
-    }, `${id}:goal`);
-    this.lastOwnedGoal ??= new Map();
-    this.lastOwnedGoal.set(String(agent.id), goal.id);
+    const previousControl = state.project.control;
+    // Set project control before arming the native goal. goals.create/resume can
+    // schedule agent/pre-step immediately; the inverse order lets that hook see
+    // the old manual/paused value and pause the brand-new goal.
     await this.request(agent, 'control', { control: 'auto' }, `${id}:control`);
-    return goal;
+    let goal;
+    try {
+      if (current && current.phase !== 'complete') {
+        goal = (current.phase === 'paused' || current.phase === 'blocked' || current.activation === 'disarmed')
+          ? this.ctx.goals.resume(agent, { id: current.id, revision: current.revision })
+          : current;
+      } else {
+        goal = this.ctx.goals.create(agent, { objective, maxGoalRounds: this.maxGoalRounds });
+      }
+      await this.request(agent, 'own_goal', {
+        goal_id: goal.id,
+        revision: goal.revision,
+        phase: goal.phase,
+      }, `${id}:goal`);
+      this.lastOwnedGoal ??= new Map();
+      this.lastOwnedGoal.set(String(agent.id), goal.id);
+      return goal;
+    } catch (error) {
+      if (goal?.phase === 'active') {
+        try { this.ctx.goals.pause(agent, { id: goal.id, revision: goal.revision }); } catch {}
+      }
+      try {
+        await this.request(agent, 'control', { control: previousControl }, `${id}:control-rollback`);
+      } catch {}
+      throw error;
+    }
   }
 
   async changeGoal(agent, action, id, { projectControl = true } = {}) {
-    const state = await this.request(agent, 'query');
+    let state = await this.request(agent, 'query');
     const current = this.ctx.goals.get(agent);
     if (!current || !state.owned_goal || current.id !== state.owned_goal.goal_id) {
       throw new Error('No plugin-owned native goal is active in this session');
+    }
+    if (projectControl) {
+      await this.request(agent, 'control', {
+        control: action === 'resume' ? 'auto' : 'paused',
+      }, `${id}:control`);
+    }
+    if (action === 'resume') {
+      state = await this.ensureAutoAttempt(agent, state, `${id}:attempt`);
     }
     let goal = current;
     if (action === 'pause' && current.phase === 'active') {
@@ -119,16 +151,14 @@ export class ResearchDomain {
     }, `${id}:goal`);
     this.lastOwnedGoal ??= new Map();
     this.lastOwnedGoal.set(String(agent.id), goal.id);
-    if (projectControl) {
-      await this.request(agent, 'control', {
-        control: action === 'resume' ? 'auto' : 'paused',
-      }, `${id}:control`);
-    }
     return goal;
   }
 
   async projectGoals(agent, action, id) {
     const sessions = await this.storage.request('project_sessions', this.identity(agent));
+    await this.request(agent, 'control', {
+      control: action === 'resume' ? 'auto' : 'paused',
+    }, `${id}:control`);
     const results = [];
     for (const row of sessions) {
       let target;
@@ -154,9 +184,6 @@ export class ResearchDomain {
         });
       }
     }
-    await this.request(agent, 'control', {
-      control: action === 'resume' ? 'auto' : 'paused',
-    }, `${id}:control`);
     return { action, sessions: results };
   }
 

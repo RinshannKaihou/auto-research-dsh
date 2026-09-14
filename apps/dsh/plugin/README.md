@@ -16,7 +16,7 @@ Build and install from this directory:
 
 ```bash
 npm pack
-dsh plugin --profile <profile-name> add ./auto-research-v5-0.3.1.tgz
+dsh plugin --profile <profile-name> add ./auto-research-v5-0.3.2.tgz
 ```
 
 Replace `<profile-name>` with the profile to modify, for example `web`, and
@@ -73,6 +73,11 @@ Autonomous mode creates a plugin-owned native goal. It refuses to replace a
 non-plugin goal. Human input pauses that session's plugin goal and remains an
 ordinary user turn. Project pause and resume affect all associated plugin goals.
 Cold-restored goals stay disarmed until explicit resume.
+
+`/research auto` also opens an autonomous planning work segment when the
+session does not have one. Project control is persisted before the native goal
+is armed, so the first `agent/pre-step` cannot mistake startup for a manual or
+paused project and immediately pause it.
 
 ## Security and failure semantics
 
