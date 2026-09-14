@@ -1,0 +1,14 @@
+{
+  "directory": "/tmp/ari-dsh-headless-eCsled",
+  "model_calls": 0,
+  "checks": [
+    "missing argv exits nonzero",
+    "role rejects and persists failure envelope",
+    "write roots rejects and persists failure envelope",
+    "schema rejects and persists failure envelope",
+    "timeout rejects and persists failure envelope",
+    "config rejects and persists failure envelope",
+    "explicit settings file selection is honored without mutation",
+    "missing model fails without fallback or LLM call"
+  ]
+}

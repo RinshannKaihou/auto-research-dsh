@@ -1,0 +1,19 @@
+{
+  "directory": "/tmp/ari-dsh-m0-wZwuwl",
+  "live": false,
+  "checks": [
+    "DSH SDK bootstrap inherits configured model",
+    "file tool allows workspace write",
+    "file tool rejects history write",
+    "file tool rejects private core read",
+    "dangling symlink escape rejected",
+    "file tool rejects symlink history write",
+    "structured submit validates required schema shape",
+    "kernel permits correct cwd and workspace write",
+    "kernel permits published history read",
+    "kernel rejects history/input/private-state writes and private reads",
+    "kernel rejects readonly hardlink and rename bypass",
+    "foreground shell child actually starts",
+    "cancel reaps tool child before completion"
+  ]
+}

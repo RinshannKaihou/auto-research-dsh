@@ -1,0 +1,22 @@
+{
+  "checks_passed": 16,
+  "checks": [
+    "live map renders the real eight-node Store snapshot",
+    "revision links preserve and distinguish the original observation and explanation",
+    "parallel input/revision relationships have separate visible paths",
+    "upstream and downstream tracing follow the selected synthesis node",
+    "zoom, pan and fit controls change the actual SVG viewport",
+    "search, question and status filters plus empty-result recovery work",
+    "keyboard navigation and partial-work details expose the fixed artifact version",
+    "all viewer interactions leave Store state unchanged",
+    "live changes retain node selection, viewport and expanded artifact metadata",
+    "a failed refresh preserves the graph and reconnects automatically",
+    "switching nodes resets details to the top while reference jumps reach the item",
+    "390px viewport has no horizontal overflow and opens/closes node details",
+    "offline HTML is interactive without network and renders hostile text inertly",
+    "an empty project has a usable explanation instead of a broken canvas",
+    "cyclic and self-referencing layout fixtures remain finite and clickable",
+    "fit includes all nodes of an 80-stage path"
+  ],
+  "browser_errors": []
+}

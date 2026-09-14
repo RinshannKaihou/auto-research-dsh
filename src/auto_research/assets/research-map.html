@@ -1,0 +1,2254 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>研究路径 · Auto Research</title>
+    <style>
+      :root {
+        --paper: #f6f5ef;
+        --surface: #fffefa;
+        --ink: #213e35;
+        --text: #303b35;
+        --muted: #7a8379;
+        --line: #dce1d6;
+        --green: #245d47;
+        --pale: #e9f0e8;
+        --amber: #946222;
+        --amber-pale: #f4edde;
+        --red: #a04f41;
+        --sans: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+        --serif: "Songti SC", "Noto Serif CJK SC", Georgia, serif;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        color: var(--text);
+        background: var(--paper);
+        font: 13px/1.65 var(--sans);
+      }
+      button,
+      input,
+      select {
+        font: inherit;
+      }
+      button,
+      select {
+        cursor: pointer;
+      }
+      button {
+        color: inherit;
+      }
+      button:focus-visible,
+      input:focus-visible,
+      select:focus-visible,
+      summary:focus-visible {
+        outline: 2px solid var(--green);
+        outline-offset: 3px;
+      }
+      button:disabled {
+        cursor: default;
+        opacity: 0.45;
+      }
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
+      }
+      button {
+        border: 0;
+        background: none;
+      }
+      a {
+        color: inherit;
+      }
+      .app {
+        height: 100dvh;
+        min-height: 520px;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      .masthead {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 28px;
+        padding: 25px 34px 23px;
+        background: var(--surface);
+        border-bottom: 1px solid var(--line);
+        flex-shrink: 0;
+      }
+      .brand {
+        display: flex;
+        gap: 22px;
+        align-items: center;
+        min-width: 0;
+      }
+      .brand-mark {
+        width: 39px;
+        height: 48px;
+        border-left: 1px solid #9fb0a2;
+        display: flex;
+        align-items: center;
+        padding-left: 9px;
+        flex-shrink: 0;
+      }
+      .brand-mark svg {
+        width: 30px;
+        height: 36px;
+      }
+      .eyebrow {
+        font-size: 9px;
+        font-weight: 600;
+        letter-spacing: 2.5px;
+        color: var(--green);
+        margin-bottom: 4px;
+      }
+      .heading-row {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+      }
+      h1 {
+        font: 30px/1.2 var(--serif);
+        font-weight: 600;
+        letter-spacing: 2px;
+        white-space: nowrap;
+      }
+      .goal {
+        max-width: 570px;
+        font-size: 12px;
+        color: #6c766c;
+        border-left: 1px solid var(--line);
+        padding-left: 18px;
+        line-height: 1.7;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+        overflow-wrap: anywhere;
+      }
+      .mast-right {
+        display: flex;
+        align-items: center;
+        gap: 28px;
+        flex-shrink: 0;
+      }
+      .budget-summary {
+        border-right: 1px solid var(--line);
+        padding-right: 28px;
+        max-width: 230px;
+        text-align: right;
+      }
+      .budget-title {
+        color: var(--muted);
+        font-size: 10px;
+        letter-spacing: 1px;
+        margin-bottom: 4px;
+      }
+      .budget-main {
+        font-size: 14px;
+        color: var(--ink);
+        font-variant-numeric: tabular-nums;
+      }
+      .budget-sub {
+        font-size: 10px;
+        color: var(--muted);
+        margin-top: 2px;
+      }
+      .connection {
+        font-size: 11px;
+        display: flex;
+        gap: 7px;
+        align-items: center;
+        white-space: nowrap;
+      }
+      .connection-dot {
+        height: 6px;
+        width: 6px;
+        border-radius: 50%;
+        background: #9ba694;
+        flex-shrink: 0;
+      }
+      .connection.live .connection-dot {
+        background: #39795c;
+        box-shadow: 0 0 0 3px #eaf2e9;
+      }
+      .connection.error .connection-dot {
+        background: #b47c3e;
+      }
+      .updated {
+        font-size: 10px;
+        color: var(--muted);
+        margin-top: 4px;
+        white-space: nowrap;
+      }
+      .toolbar {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        min-height: 68px;
+        padding: 13px 34px;
+        border-bottom: 1px solid var(--line);
+        background: #f9f8f3;
+        flex-shrink: 0;
+      }
+      .search-wrap {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        min-width: 180px;
+        width: 260px;
+        background: var(--surface);
+        border: 1px solid #d8ded1;
+        border-radius: 5px;
+        padding: 7px 12px;
+      }
+      .search-wrap svg {
+        width: 15px;
+        height: 15px;
+        flex-shrink: 0;
+        color: var(--muted);
+      }
+      #search {
+        border: 0;
+        outline: 0;
+        background: none;
+        min-width: 0;
+        width: 100%;
+        font-size: 12px;
+        color: var(--ink);
+      }
+      #search::placeholder {
+        color: #92998e;
+      }
+      .filter {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        color: var(--muted);
+        font-size: 11px;
+      }
+      .filter select {
+        color: #47564b;
+        background: var(--surface);
+        border: 1px solid #d8ded1;
+        border-radius: 5px;
+        padding: 7px 28px 7px 10px;
+        max-width: 190px;
+        font-size: 12px;
+      }
+      .clear-filter {
+        color: var(--green);
+        font-size: 11px;
+        text-decoration: underline;
+        text-underline-offset: 3px;
+        white-space: nowrap;
+      }
+      .toolbar-end {
+        margin-left: auto;
+        font-size: 11px;
+        color: var(--muted);
+        white-space: nowrap;
+      }
+      .workspace {
+        display: flex;
+        flex: 1;
+        min-height: 0;
+      }
+      .map {
+        position: relative;
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        background-color: var(--paper);
+        background-image: radial-gradient(#aebdab55 0.7px, transparent 0.7px);
+        background-size: 20px 20px;
+      }
+      .map-header {
+        position: absolute;
+        z-index: 2;
+        top: 22px;
+        left: 27px;
+        right: 24px;
+        pointer-events: none;
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+      }
+      .map-heading {
+        font-size: 10px;
+        letter-spacing: 1.7px;
+        color: #7d897b;
+      }
+      .map-count {
+        font-size: 12px;
+        color: #53674f;
+        margin-top: 5px;
+      }
+      .map-hint {
+        font-size: 10px;
+        color: #8a9484;
+        align-self: center;
+      }
+      .overview-button {
+        display: none;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 5px 10px;
+        pointer-events: auto;
+      }
+      #canvas {
+        width: 100%;
+        height: 100%;
+        display: block;
+        touch-action: none;
+        cursor: grab;
+      }
+      #canvas.dragging {
+        cursor: grabbing;
+      }
+      .edge {
+        fill: none;
+        stroke: #a8b9a8;
+        stroke-width: 1.5;
+        vector-effect: non-scaling-stroke;
+        pointer-events: none;
+        transition: opacity 0.15s;
+      }
+      .edge.revision {
+        stroke: #bd9969;
+        stroke-dasharray: 5 5;
+      }
+      .edge-hit {
+        fill: none;
+        stroke: transparent;
+        stroke-width: 14;
+        vector-effect: non-scaling-stroke;
+        pointer-events: stroke;
+        cursor: help;
+      }
+      .edge.active {
+        stroke: var(--green);
+        stroke-width: 2;
+      }
+      .edge.revision.active {
+        stroke: #ac782f;
+      }
+      .edge.dim {
+        opacity: 0.17;
+      }
+      .node {
+        cursor: pointer;
+        outline: none;
+      }
+      .node .card {
+        fill: var(--surface);
+        stroke: #cfdbcb;
+        stroke-width: 1;
+        filter: url(#card-shadow);
+      }
+      .node:hover .card {
+        stroke: #799b80;
+        stroke-width: 1.5;
+      }
+      .node.selected .card {
+        fill: #f6fbf3;
+        stroke: var(--green);
+        stroke-width: 2;
+      }
+      .node:focus-visible .card {
+        stroke: #0e6550;
+        stroke-width: 3;
+      }
+      .node.related .card {
+        stroke: #7d9e7d;
+      }
+      .node.dim {
+        opacity: 0.32;
+      }
+      .node text {
+        pointer-events: none;
+        font-family: var(--sans);
+      }
+      .node-id {
+        font-size: 11px;
+        font-weight: 500;
+        letter-spacing: 0.3px;
+        fill: #52705a;
+      }
+      .node-title {
+        font-size: 14px;
+        font-weight: 500;
+        fill: #2f4235;
+      }
+      .node-meta {
+        font-size: 10px;
+        fill: #83917f;
+      }
+      .node-state {
+        font-size: 9px;
+      }
+      .node-dot {
+        fill: #829276;
+      }
+      .node-status-proposed {
+        fill: #f0f1eb;
+      }
+      .node-status-closed,
+      .node-status-completed {
+        fill: #eff2e9;
+      }
+      .node-status-open,
+      .node-status-running {
+        fill: #e5efe5;
+      }
+      .node-status-failed,
+      .node-status-unknown,
+      .node-status-interrupted {
+        fill: #f5eadb;
+      }
+      .node .state-label {
+        fill: #6b7e64;
+      }
+      .node .warning-label {
+        fill: #99682f;
+      }
+      .node .running-label {
+        fill: #2f7550;
+      }
+      .node .partial-mark {
+        fill: #ab8245;
+      }
+      .legend {
+        position: absolute;
+        left: 28px;
+        bottom: 23px;
+        display: flex;
+        gap: 18px;
+        align-items: center;
+        flex-wrap: wrap;
+        max-width: 65%;
+        pointer-events: none;
+        font-size: 10px;
+        color: #7d8976;
+      }
+      .legend-item {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+      }
+      .legend-line {
+        width: 24px;
+        height: 0;
+        border-top: 1.5px solid #95aa91;
+        position: relative;
+      }
+      .legend-line:after {
+        content: "";
+        position: absolute;
+        right: 0;
+        top: -3px;
+        border-left: 4px solid #95aa91;
+        border-top: 2px solid transparent;
+        border-bottom: 2px solid transparent;
+      }
+      .legend-line.revision {
+        border-color: #b48d58;
+        border-top-style: dashed;
+      }
+      .legend-line.revision:after {
+        border-left-color: #b48d58;
+      }
+      .map-controls {
+        position: absolute;
+        right: 24px;
+        bottom: 19px;
+        display: flex;
+        align-items: center;
+        gap: 1px;
+        padding: 3px;
+        border: 1px solid #d7decf;
+        border-radius: 6px;
+        background: var(--surface);
+        box-shadow: 0 3px 12px #2c402608;
+      }
+      .map-controls button {
+        min-width: 31px;
+        min-height: 31px;
+        font-size: 17px;
+        border-radius: 3px;
+        line-height: 1;
+      }
+      .map-controls button:hover {
+        background: var(--pale);
+      }
+      .map-controls #fit {
+        font-size: 11px;
+        padding: 0 10px;
+        border-left: 1px solid var(--line);
+        margin-left: 3px;
+        border-radius: 0;
+      }
+      #zoom-label {
+        font-size: 10px;
+        color: #839078;
+        min-width: 37px;
+        text-align: center;
+        font-variant-numeric: tabular-nums;
+      }
+      .empty-state {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        padding: 50px;
+        pointer-events: none;
+      }
+      .empty-state[hidden] {
+        display: none;
+      }
+      .empty-icon {
+        height: 64px;
+        width: 64px;
+        position: relative;
+        margin-bottom: 22px;
+        border: 1px dashed #b2c1ac;
+        border-radius: 50%;
+      }
+      .empty-icon:after {
+        content: "＋";
+        color: #96a98d;
+        font: 26px/64px var(--serif);
+      }
+      .empty-state h2 {
+        font: 22px var(--serif);
+        color: #53694c;
+        margin-bottom: 12px;
+      }
+      .empty-state p {
+        font-size: 12px;
+        color: #929b8b;
+        max-width: 350px;
+        line-height: 1.9;
+      }
+      .empty-state button {
+        pointer-events: auto;
+        margin-top: 16px;
+        color: var(--green);
+        font-size: 12px;
+        text-decoration: underline;
+        text-underline-offset: 4px;
+      }
+      .details {
+        width: 366px;
+        max-width: 40%;
+        background: var(--surface);
+        border-left: 1px solid var(--line);
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        flex-shrink: 0;
+      }
+      .details-heading {
+        padding: 22px 25px 18px;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .details-eyebrow {
+        font-size: 10px;
+        letter-spacing: 1.6px;
+        color: var(--muted);
+        margin-bottom: 4px;
+      }
+      .details-heading h2 {
+        font: 21px var(--serif);
+        color: var(--ink);
+      }
+      .close-details {
+        font-size: 22px;
+        color: #8c9985;
+        width: 28px;
+        height: 28px;
+        line-height: 1;
+      }
+      .close-details:hover {
+        background: var(--pale);
+        border-radius: 50%;
+      }
+      .details-scroll {
+        overflow-y: auto;
+        padding: 22px 25px 32px;
+        scrollbar-width: thin;
+        scrollbar-color: #c7d3c0 transparent;
+        min-height: 0;
+        scroll-behavior: auto;
+      }
+      .detail-title {
+        font: 21px/1.55 var(--serif);
+        color: var(--ink);
+        font-weight: 500;
+        overflow-wrap: anywhere;
+        margin: 13px 0 14px;
+      }
+      .detail-meta {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        font-size: 10px;
+        color: var(--muted);
+      }
+      .badge {
+        display: inline-block;
+        border: 1px solid #dce5d5;
+        border-radius: 3px;
+        padding: 2px 7px;
+        font-size: 10px;
+        line-height: 1.4;
+        color: #6d815f;
+        background: #f3f5ec;
+        white-space: nowrap;
+      }
+      .badge.green {
+        color: #3c7354;
+        background: #edf5e8;
+        border-color: #dce8d5;
+      }
+      .badge.amber {
+        color: #9a7136;
+        background: #faf3e6;
+        border-color: #ebdcc2;
+      }
+      .stage-note {
+        font-size: 10px;
+        color: #88947f;
+        margin-top: 10px;
+      }
+      .path-switch {
+        display: flex;
+        margin: 20px 0 2px;
+        gap: 3px;
+        padding: 3px;
+        background: #f1f3eb;
+        border-radius: 5px;
+      }
+      .path-switch button {
+        flex: 1;
+        padding: 6px 3px;
+        font-size: 11px;
+        border-radius: 3px;
+        color: #7a8b70;
+      }
+      .path-switch button.active {
+        background: var(--surface);
+        color: var(--green);
+        box-shadow: 0 1px 3px #32442a0a;
+      }
+      .detail-section {
+        border-top: 1px solid #e8ebdf;
+        padding-top: 18px;
+        margin-top: 21px;
+      }
+      .section-title {
+        font-size: 11px;
+        letter-spacing: 0.7px;
+        font-weight: 600;
+        color: #5e7354;
+        margin-bottom: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .section-count {
+        color: #9aa591;
+        font-weight: 400;
+        font-size: 10px;
+      }
+      .prose {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        font-size: 12px;
+        color: #6c7a60;
+        line-height: 1.95;
+      }
+      .prose:empty {
+        display: none;
+      }
+      .muted {
+        color: #9ba38f;
+        font-size: 11px;
+      }
+      .ref-button {
+        max-width: 100%;
+        text-align: left;
+        color: #3d7353;
+        font:
+          11px/1.6 ui-monospace,
+          SFMono-Regular,
+          Consolas,
+          monospace;
+        overflow-wrap: anywhere;
+        text-decoration: underline;
+        text-decoration-color: #bfd1b5;
+        text-underline-offset: 3px;
+        padding: 1px 0;
+        display: inline-block;
+      }
+      .ref-button:hover {
+        color: #163f2b;
+        text-decoration-color: #52714a;
+      }
+      .ref-button:disabled {
+        color: #8d9682;
+        text-decoration: none;
+        opacity: 1;
+      }
+      .reference {
+        margin-bottom: 12px;
+      }
+      .reference:last-child {
+        margin-bottom: 0;
+      }
+      .reference .prose {
+        font-size: 11px;
+        margin-top: 4px;
+      }
+      .product,
+      .finding {
+        padding: 13px;
+        background: #f8f9f1;
+        border: 1px solid #e4e9d9;
+        border-radius: 5px;
+        margin-bottom: 10px;
+        scroll-margin-top: 15px;
+      }
+      .item-heading {
+        display: flex;
+        justify-content: space-between;
+        gap: 7px;
+        align-items: flex-start;
+        margin-bottom: 7px;
+      }
+      .item-id {
+        font:
+          11px/1.5 ui-monospace,
+          SFMono-Regular,
+          Consolas,
+          monospace;
+        color: #4c704b;
+        overflow-wrap: anywhere;
+      }
+      .finding {
+        background: #fdfcf5;
+      }
+      .finding .prose {
+        font-size: 12px;
+      }
+      .field-label {
+        font-size: 10px;
+        color: #8c997d;
+        margin-top: 10px;
+        margin-bottom: 3px;
+      }
+      .gap-list,
+      .next-list {
+        margin: 6px 0 0;
+        padding-left: 17px;
+        color: #7a856b;
+        font-size: 11px;
+        line-height: 1.85;
+      }
+      .gap-list li,
+      .next-list li {
+        padding-left: 2px;
+        overflow-wrap: anywhere;
+        white-space: pre-wrap;
+      }
+      .artifact-version {
+        margin-top: 10px;
+        font-size: 10px;
+        color: #859378;
+      }
+      .artifact-version summary {
+        cursor: pointer;
+        width: fit-content;
+      }
+      .artifact-version code {
+        display: block;
+        padding-top: 7px;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        font-size: 10px;
+        line-height: 1.65;
+        color: #839176;
+      }
+      .revision-note {
+        border-left: 2px solid #ccb07e;
+        padding-left: 9px;
+        margin-top: 13px;
+        color: #9b7c46;
+        font-size: 10px;
+      }
+      .revision-note .ref-button {
+        color: #997338;
+        font-size: 10px;
+      }
+      .attempt {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 8px 0;
+        border-bottom: 1px solid #edf0e5;
+        color: #7c896d;
+        font-size: 10px;
+      }
+      .attempt:last-child {
+        border-bottom: 0;
+      }
+      .attempt div:first-child {
+        min-width: 0;
+      }
+      .attempt .attempt-id {
+        color: #546d4c;
+        font:
+          10px ui-monospace,
+          SFMono-Regular,
+          Consolas,
+          monospace;
+      }
+      .attempt-time {
+        margin-top: 3px;
+      }
+      .attempt-cost {
+        white-space: nowrap;
+        text-align: right;
+      }
+      .overview-number {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 12px;
+        margin: 23px 0 5px;
+      }
+      .overview-number strong {
+        display: block;
+        font: 24px var(--serif);
+        font-weight: 400;
+        color: #4f6b43;
+      }
+      .overview-number span {
+        font-size: 10px;
+        color: #8c987c;
+      }
+      .question {
+        margin-bottom: 14px;
+      }
+      .question-id {
+        font:
+          10px ui-monospace,
+          SFMono-Regular,
+          Consolas,
+          monospace;
+        color: #5b7c4e;
+        margin-bottom: 3px;
+      }
+      .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+      }
+      .toast {
+        position: absolute;
+        top: 68px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: var(--surface);
+        border: 1px solid var(--line);
+        padding: 7px 12px;
+        border-radius: 5px;
+        font-size: 11px;
+        color: #6b795e;
+        box-shadow: 0 4px 20px #2839210c;
+        z-index: 5;
+        max-width: 90%;
+        text-align: center;
+      }
+      .toast[hidden] {
+        display: none;
+      }
+      @media (min-width: 1600px) {
+        .details {
+          width: 410px;
+        }
+        .details-scroll {
+          padding: 25px 30px;
+        }
+        .details-heading {
+          padding-left: 30px;
+          padding-right: 30px;
+        }
+        .masthead {
+          padding-left: 42px;
+          padding-right: 42px;
+        }
+        .toolbar {
+          padding-left: 42px;
+          padding-right: 42px;
+        }
+      }
+      @media (max-width: 1100px) {
+        .mast-right {
+          gap: 14px;
+        }
+        .budget-summary {
+          padding-right: 14px;
+          max-width: 180px;
+        }
+        .goal {
+          max-width: 290px;
+        }
+        .brand {
+          gap: 13px;
+        }
+        .details {
+          width: 320px;
+        }
+        .toolbar {
+          gap: 11px;
+        }
+        .filter select {
+          max-width: 135px;
+        }
+        .toolbar-end {
+          display: none;
+        }
+        .search-wrap {
+          width: 230px;
+        }
+        .masthead {
+          padding: 21px 24px;
+        }
+        .toolbar {
+          padding-left: 24px;
+          padding-right: 24px;
+        }
+        .details-scroll,
+        .details-heading {
+          padding-left: 20px;
+          padding-right: 20px;
+        }
+      }
+      @media (max-width: 800px) {
+        .masthead {
+          padding: 17px 20px;
+          gap: 14px;
+        }
+        .brand-mark {
+          display: none;
+        }
+        .brand {
+          gap: 0;
+          flex: 1;
+        }
+        .heading-row {
+          gap: 12px;
+        }
+        h1 {
+          font-size: 25px;
+        }
+        .eyebrow {
+          font-size: 8px;
+          letter-spacing: 2px;
+        }
+        .goal {
+          font-size: 10px;
+          padding-left: 12px;
+          max-width: unset;
+        }
+        .mast-right {
+          display: none;
+        }
+        .toolbar {
+          flex-wrap: wrap;
+          padding: 12px 20px;
+          gap: 9px 13px;
+          min-height: 108px;
+        }
+        .search-wrap {
+          width: 100%;
+          padding: 6px 10px;
+        }
+        .filter {
+          gap: 6px;
+        }
+        .filter select {
+          max-width: 168px;
+          padding-top: 5px;
+          padding-bottom: 5px;
+        }
+        .details {
+          display: none;
+          position: absolute;
+          z-index: 8;
+          right: 12px;
+          left: 12px;
+          bottom: 12px;
+          width: auto;
+          max-width: none;
+          max-height: 73dvh;
+          border: 1px solid #d0ddc6;
+          border-radius: 10px;
+          box-shadow: 0 12px 50px #1a301d25;
+        }
+        .details.mobile-open {
+          display: flex;
+        }
+        .details-heading {
+          padding: 15px 20px 13px;
+        }
+        .details-heading h2 {
+          font-size: 20px;
+        }
+        .details-scroll {
+          padding-top: 16px;
+        }
+        .map-header {
+          top: 18px;
+          left: 21px;
+          right: 20px;
+        }
+        .map-hint {
+          display: none;
+        }
+        .overview-button {
+          display: block;
+        }
+        .legend {
+          left: 20px;
+          bottom: 21px;
+          max-width: 45%;
+          gap: 7px 14px;
+        }
+        .map-controls {
+          right: 18px;
+          bottom: 18px;
+        }
+        .empty-state {
+          padding: 32px;
+        }
+        .map-count {
+          font-size: 11px;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        * {
+          scroll-behavior: auto !important;
+          transition: none !important;
+        }
+      }
+      body.embedded .masthead {
+        display: none;
+      }
+      body.embedded .app {
+        min-height: 300px;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="app">
+      <header class="masthead">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 30 40" fill="none">
+              <path d="M5 5v12l18 10v9M5 17l18-9v19" stroke="#57734f" stroke-width="1" />
+              <circle cx="5" cy="5" r="3" fill="#365c40" />
+              <circle cx="5" cy="17" r="3" fill="#f9faf1" stroke="#57734f" />
+              <circle cx="23" cy="8" r="3" fill="#f9faf1" stroke="#57734f" />
+              <circle cx="23" cy="27" r="3" fill="#365c40" />
+              <circle cx="23" cy="36" r="2" fill="#a7b995" />
+            </svg>
+          </div>
+          <div>
+            <div class="eyebrow">AUTO RESEARCH &nbsp; / &nbsp; v0.1</div>
+            <div class="heading-row">
+              <h1>研究路径</h1>
+              <p class="goal" id="goal"></p>
+            </div>
+          </div>
+        </div>
+        <div class="mast-right">
+          <div class="budget-summary">
+            <div class="budget-title">研究投入 · TOKEN</div>
+            <div class="budget-main" id="budget-main">—</div>
+            <div class="budget-sub" id="budget-sub"></div>
+          </div>
+          <div>
+            <div class="connection" id="connection">
+              <span class="connection-dot"></span><span id="connection-text">读取研究记录</span>
+            </div>
+            <div class="updated" id="updated"></div>
+          </div>
+        </div>
+      </header>
+      <div class="toolbar" role="search" aria-label="筛选研究节点">
+        <label class="search-wrap"
+          ><svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <circle cx="8.5" cy="8.5" r="5.5" stroke="currentColor" stroke-width="1.3" />
+            <path d="m12.7 12.7 4 4" stroke="currentColor" stroke-width="1.3" /></svg
+          ><span class="sr-only">搜索节点、问题或研究内容</span
+          ><input
+            id="search"
+            type="search"
+            placeholder="搜索节点、问题或研究内容…"
+            autocomplete="off"
+        /></label>
+        <label class="filter"
+          >问题<select id="question-filter">
+            <option value="">全部问题</option>
+          </select></label
+        >
+        <label class="filter"
+          >状态<select id="status-filter">
+            <option value="">全部状态</option>
+            <option value="proposed">待开展</option>
+            <option value="open">未归档</option>
+            <option value="closed">已归档</option>
+            <option value="attention">需关注</option>
+          </select></label
+        >
+        <button class="clear-filter" id="clear-filter" hidden>清除筛选</button
+        ><span class="toolbar-end">已归档表示阶段结束，问题仍可继续探索</span>
+      </div>
+      <div class="workspace">
+        <section class="map" aria-label="研究路径图">
+          <div class="map-header">
+            <div>
+              <div class="map-heading">EXPLORATION MAP</div>
+              <div class="map-count" id="map-count"></div>
+            </div>
+            <span class="map-hint">拖动画布 · 滚轮缩放 · 点击查看关联</span
+            ><button class="overview-button" id="overview">课题概览</button>
+          </div>
+          <svg
+            id="canvas"
+            role="group"
+            aria-label="有向研究图，按 Tab 选择节点，Enter 查看详情"
+          ></svg>
+          <div class="empty-state" id="empty-state" hidden>
+            <div class="empty-icon" aria-hidden="true"></div>
+            <h2 id="empty-title">第一段探索，从这里开始</h2>
+            <p id="empty-description">
+              课题已经建立。新的探索发布后，分支、引用与汇聚会显示在这张地图上。
+            </p>
+            <button id="empty-clear" hidden>清除筛选，查看全部节点</button>
+          </div>
+          <div class="legend">
+            <span class="legend-item"><span class="legend-line"></span>材料与研究来源</span
+            ><span class="legend-item"><span class="legend-line revision"></span>后续修订</span>
+          </div>
+          <div class="map-controls" aria-label="画布控制">
+            <button id="zoom-out" aria-label="缩小">−</button
+            ><span id="zoom-label" aria-live="off">100%</span
+            ><button id="zoom-in" aria-label="放大">＋</button><button id="fit">适配视图</button>
+          </div>
+          <div class="toast" id="toast" role="status" hidden></div>
+        </section>
+        <aside class="details" id="details" aria-label="探索详情">
+          <div class="details-heading">
+            <div>
+              <div class="details-eyebrow" id="details-eyebrow">RESEARCH CONTEXT</div>
+              <h2 id="details-heading">课题概览</h2>
+            </div>
+            <button class="close-details" id="close-details" aria-label="关闭详情">×</button>
+          </div>
+          <div class="details-scroll" id="details-body"></div>
+        </aside>
+      </div>
+    </main>
+    <div class="sr-only" role="status" aria-live="polite" id="announcement"></div>
+    <script type="application/json" id="ari-graph-data">__ARI_GRAPH_DATA__</script>
+    <script>
+      "use strict";
+      const LIVE = __ARI_LIVE__;
+      const mapParameters = new URLSearchParams(window.location.search);
+      const mapProject = mapParameters.get("project");
+      const graphEndpoint = mapProject
+        ? "/api/graph?project=" + encodeURIComponent(mapProject)
+        : "/api/graph";
+      document.body.classList.toggle("embedded", mapParameters.get("embedded") === "1");
+      // GRAPH_LOGIC_START
+      const GraphLogic = (() => {
+        const compare = (a, b) => String(a).localeCompare(String(b), "en", { numeric: true });
+        function graph(nodes, edges) {
+          const ids = [...new Set(nodes.map((n) => String(n.id)))].sort(compare),
+            known = new Set(ids);
+          const outgoing = new Map(ids.map((id) => [id, []])),
+            incoming = new Map(ids.map((id) => [id, []]));
+          for (const edge of edges)
+            if (known.has(edge.source) && known.has(edge.target)) {
+              outgoing.get(edge.source).push(edge.target);
+              incoming.get(edge.target).push(edge.source);
+            }
+          for (const values of [...outgoing.values(), ...incoming.values()]) values.sort(compare);
+          return { ids, outgoing, incoming };
+        }
+        function reach(start, neighbors) {
+          const visited = new Set(),
+            queue = [start];
+          for (let i = 0; i < queue.length; i++)
+            for (const id of neighbors.get(queue[i]) || []) {
+              if (id !== start && !visited.has(id)) {
+                visited.add(id);
+                queue.push(id);
+              }
+            }
+          return visited;
+        }
+        function layout(nodes, edges) {
+          const { ids, outgoing, incoming } = graph(nodes, edges),
+            seen = new Set(),
+            order = [];
+          // Iterative strongly connected components keep cycles finite, including self-loops.
+          for (const root of ids) {
+            if (seen.has(root)) continue;
+            seen.add(root);
+            const stack = [[root, 0]];
+            while (stack.length) {
+              const top = stack[stack.length - 1],
+                children = outgoing.get(top[0]);
+              if (top[1] < children.length) {
+                const next = children[top[1]++];
+                if (!seen.has(next)) {
+                  seen.add(next);
+                  stack.push([next, 0]);
+                }
+              } else {
+                order.push(top[0]);
+                stack.pop();
+              }
+            }
+          }
+          const component = new Map(),
+            groups = [];
+          for (const root of order.reverse()) {
+            if (component.has(root)) continue;
+            const index = groups.length,
+              members = [],
+              stack = [root];
+            component.set(root, index);
+            while (stack.length) {
+              const id = stack.pop();
+              members.push(id);
+              for (const next of incoming.get(id))
+                if (!component.has(next)) {
+                  component.set(next, index);
+                  stack.push(next);
+                }
+            }
+            members.sort(compare);
+            groups.push(members);
+          }
+          const links = groups.map(() => new Set()),
+            degree = groups.map(() => 0),
+            rank = groups.map(() => 0);
+          for (const [source, targets] of outgoing)
+            for (const target of targets) {
+              const a = component.get(source),
+                b = component.get(target);
+              if (a !== b && !links[a].has(b)) {
+                links[a].add(b);
+                degree[b]++;
+              }
+            }
+          const ready = groups.map((_, i) => i).filter((i) => degree[i] === 0);
+          while (ready.length) {
+            ready.sort((a, b) => compare(groups[a][0], groups[b][0]));
+            const current = ready.shift();
+            for (const next of links[current]) {
+              rank[next] = Math.max(rank[next], rank[current] + 1);
+              if (--degree[next] === 0) ready.push(next);
+            }
+          }
+          const columns = [];
+          for (const id of ids) {
+            const r = rank[component.get(id)];
+            (columns[r] ||= []).push(id);
+          }
+          const positions = new Map(),
+            height = 114,
+            width = 226,
+            rowGap = 42,
+            columnGap = 48;
+          const maxRows = Math.max(1, ...columns.map((c) => c.length));
+          for (let col = 0; col < columns.length; col++) {
+            const members = columns[col],
+              center = (id) => {
+                const prior = (incoming.get(id) || []).map((p) => positions.get(p)).filter(Boolean);
+                return prior.length ? prior.reduce((s, p) => s + p.y, 0) / prior.length : Infinity;
+              };
+            members.sort((a, b) => {
+              const difference = center(a) - center(b);
+              return Number.isNaN(difference) || difference === 0 ? compare(a, b) : difference;
+            });
+            const start = ((maxRows - members.length) * (height + rowGap)) / 2;
+            members.forEach((id, row) =>
+              positions.set(id, {
+                x: col * (width + columnGap),
+                y: start + row * (height + rowGap),
+                width,
+                height,
+              }),
+            );
+          }
+          return {
+            positions,
+            width: columns.length ? columns.length * (width + columnGap) - columnGap : 0,
+            height: maxRows * (height + rowGap) - rowGap,
+            groups,
+          };
+        }
+        function aggregateEdges(edges) {
+          const grouped = new Map();
+          for (const edge of edges) {
+            const kind = edge.kind === "revision" ? "revision" : "input",
+              key = JSON.stringify([edge.source, edge.target, kind]);
+            if (!grouped.has(key))
+              grouped.set(key, { source: edge.source, target: edge.target, kind, references: [] });
+            grouped
+              .get(key)
+              .references.push({ ref: edge.ref, use: edge.use, finding_ref: edge.finding_ref });
+          }
+          const result = [...grouped.values()].sort(
+            (a, b) =>
+              compare(a.source, b.source) || compare(a.target, b.target) || compare(a.kind, b.kind),
+          );
+          for (const edge of result) {
+            const pair = result.filter(
+              (other) => other.source === edge.source && other.target === edge.target,
+            );
+            edge.lane = pair.length > 1 ? (edge.kind === "revision" ? 8 : -8) : 0;
+          }
+          return result;
+        }
+        function nodeFromRef(ref, known) {
+          if (typeof ref !== "string") return null;
+          const match = ref.match(/^([^/]+)\/result#(.+)$/);
+          return match && known.has(match[1]) ? match[1] : null;
+        }
+        function matches(node, query, question, status, attention) {
+          if (question && node.question !== question) return false;
+          if (status === "attention" ? !attention.has(node.id) : status && node.status !== status)
+            return false;
+          if (!query) return true;
+          return JSON.stringify(node).toLocaleLowerCase().includes(query.toLocaleLowerCase());
+        }
+        return { graph, reach, layout, aggregateEdges, nodeFromRef, matches };
+      })();
+      // GRAPH_LOGIC_END
+      const $ = (id) => document.getElementById(id),
+        svgNS = "http://www.w3.org/2000/svg";
+      const plain = (value) =>
+        value == null
+          ? ""
+          : typeof value === "object"
+            ? JSON.stringify(value, null, 2)
+            : String(value);
+      const array = (value) => (Array.isArray(value) ? value : []);
+      const create = (tag, className, text) => {
+        const element = document.createElement(tag);
+        if (className) element.className = className;
+        if (text != null) element.textContent = plain(text);
+        return element;
+      };
+      const svg = (tag, attributes = {}, text) => {
+        const element = document.createElementNS(svgNS, tag);
+        for (const [key, value] of Object.entries(attributes))
+          element.setAttribute(key, String(value));
+        if (text != null) element.textContent = plain(text);
+        return element;
+      };
+      let data = {},
+        nodes = [],
+        edges = [],
+        visualEdges = [],
+        nodeMap = new Map(),
+        attemptMap = new Map(),
+        positions = new Map(),
+        adjacency,
+        selected = null,
+        pathMode = "both",
+        visible = new Set(),
+        view = { x: 0, y: 0, k: 1 },
+        minimumZoom = 0.12,
+        group = null,
+        firstDraw = true;
+      let lastPayload = "",
+        toastTimer = null,
+        lastGood = null;
+      const stateLabels = {
+        proposed: "待开展",
+        open: "未归档",
+        closed: "已归档",
+        reserved: "待派发",
+        running: "运行中",
+        unknown: "待核实",
+        failed: "执行失败",
+        interrupted: "已中断",
+        completed: "已完成",
+      };
+      function nodeState(node) {
+        if (node.status === "closed") return "closed";
+        const attempts = attemptMap.get(node.id) || [];
+        return attempts.length ? attempts[attempts.length - 1].state : node.status;
+      }
+      function number(value) {
+        return typeof value === "number" && Number.isFinite(value) ? value : null;
+      }
+      function compact(value) {
+        const n = number(value);
+        if (n === null) return "—";
+        return new Intl.NumberFormat("zh-CN", {
+          notation: "compact",
+          maximumFractionDigits: 1,
+        }).format(n);
+      }
+      function date(value) {
+        if (!value) return "";
+        const time = new Date(typeof value === "number" && value < 1e12 ? value * 1000 : value);
+        return Number.isNaN(time.getTime())
+          ? ""
+          : time.toLocaleString("zh-CN", {
+              month: "2-digit",
+              day: "2-digit",
+              hour: "2-digit",
+              minute: "2-digit",
+              hour12: false,
+            });
+      }
+      function notify(message) {
+        $("toast").textContent = message;
+        $("toast").hidden = false;
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => {
+          $("toast").hidden = true;
+        }, 2500);
+      }
+      function announce(message) {
+        $("announcement").textContent = message;
+      }
+      function labelLines(text, max = 14.5, limit = 2) {
+        const chars = Array.from(plain(text).replace(/\s+/g, " ").trim()),
+          lines = [];
+        let line = "",
+          units = 0;
+        for (let i = 0; i < chars.length; i++) {
+          const c = chars[i],
+            cost = c.charCodeAt(0) > 255 ? 1 : 0.55;
+          if (units + cost > max && line) {
+            lines.push(line);
+            if (lines.length === limit)
+              return [...lines.slice(0, -1), lines[lines.length - 1].slice(0, -1) + "…"];
+            line = "";
+            units = 0;
+          }
+          line += c;
+          units += cost;
+        }
+        if (line) lines.push(line);
+        return lines.slice(0, limit);
+      }
+      function summary(node) {
+        return plain(node.title || node.why_now || node.plan || node.id).replace(/^#+\s*/, "");
+      }
+      function cardSummary(node) {
+        return summary(node).split(/(?:[。！？\n]|[.!?](?:\s|$))/)[0] || summary(node);
+      }
+      function applyView() {
+        if (group)
+          group.setAttribute("transform", `translate(${view.x} ${view.y}) scale(${view.k})`);
+        const percentage = view.k * 100;
+        $("zoom-label").textContent =
+          (percentage < 1 ? percentage.toFixed(2) : Math.round(percentage)) + "%";
+      }
+      function fit() {
+        const bounds = [...visible].map((id) => positions.get(id)).filter(Boolean);
+        if (!bounds.length) return;
+        const drawing = group?.getBBox();
+        const width = $("canvas").clientWidth,
+          height = $("canvas").clientHeight,
+          minX = drawing ? drawing.x : Math.min(...bounds.map((p) => p.x)),
+          minY = drawing ? drawing.y : Math.min(...bounds.map((p) => p.y)),
+          maxX = drawing
+            ? drawing.x + drawing.width
+            : Math.max(...bounds.map((p) => p.x + p.width)),
+          maxY = drawing
+            ? drawing.y + drawing.height
+            : Math.max(...bounds.map((p) => p.y + p.height));
+        view.k = Math.min(
+          1.05,
+          Math.max(10, width - 110) / (maxX - minX),
+          Math.max(10, height - 175) / (maxY - minY),
+        );
+        minimumZoom = Math.min(0.12, view.k);
+        view.x = (width - (maxX - minX) * view.k) / 2 - minX * view.k;
+        view.y = (height - (maxY - minY) * view.k) / 2 - minY * view.k + 10;
+        applyView();
+      }
+      function zoom(factor, x = $("canvas").clientWidth / 2, y = $("canvas").clientHeight / 2) {
+        const next = Math.max(minimumZoom, Math.min(2.8, view.k * factor));
+        view.x = x - ((x - view.x) * next) / view.k;
+        view.y = y - ((y - view.y) * next) / view.k;
+        view.k = next;
+        applyView();
+      }
+      function centerNode(id) {
+        const p = positions.get(id);
+        if (!p) return;
+        view.x = $("canvas").clientWidth / 2 - (p.x + p.width / 2) * view.k;
+        view.y = $("canvas").clientHeight / 2 - (p.y + p.height / 2) * view.k;
+        applyView();
+      }
+      function updateConnection(ok) {
+        const element = $("connection");
+        element.className = "connection" + (LIVE ? (ok ? " live" : " error") : "");
+        $("connection-text").textContent = LIVE
+          ? ok
+            ? "实时同步"
+            : "连接中断 · 重试中"
+          : "离线快照";
+        $("updated").textContent =
+          (LIVE ? "最近同步 " : "快照读取 ") + (lastGood ? date(lastGood) : "—");
+      }
+      function badge(text, kind = "") {
+        return create("span", "badge " + kind, text);
+      }
+      function refButton(ref) {
+        const known = new Set(nodeMap.keys()),
+          id = GraphLogic.nodeFromRef(ref, known),
+          button = create("button", "ref-button", ref);
+        button.type = "button";
+        button.disabled = !id;
+        button.setAttribute("aria-label", id ? `查看引用 ${ref}` : `无法定位引用 ${plain(ref)}`);
+        if (id)
+          button.addEventListener("click", () => selectNode(id, { reference: ref, center: true }));
+        return button;
+      }
+      function section(parent, title, count) {
+        const block = create("section", "detail-section"),
+          heading = create("h3", "section-title", title);
+        if (count != null) heading.append(create("span", "section-count", count));
+        block.append(heading);
+        parent.append(block);
+        return block;
+      }
+      function prose(parent, value, fallback) {
+        parent.append(create("p", value ? "prose" : "muted", value || fallback || "尚未记录"));
+      }
+      function list(parent, values, className = "gap-list") {
+        const items = array(values);
+        if (!items.length) return;
+        const ul = create("ul", className);
+        for (const value of items) ul.append(create("li", "", value));
+        parent.append(ul);
+      }
+      function questionText(node) {
+        const question = array(data.agenda?.questions).find((q) => q.id === node.question);
+        if (node.agenda_version !== data.agenda?.version)
+          return `${plain(node.question)} · 采用议程 v${node.agenda_version ?? "未记录"}\n当前议程为 v${data.agenda?.version ?? "—"}；本视图未附该节点采用的历史问题正文。`;
+        return question ? plain(question.text) : `${plain(node.question)} · 当前议程未收录此问题`;
+      }
+      function showOverview() {
+        selected = null;
+        $("details-eyebrow").textContent = "RESEARCH CONTEXT";
+        $("details-heading").textContent = "课题概览";
+        const body = $("details-body");
+        body.replaceChildren();
+        body.append(
+          create("p", "detail-meta", `议程版本 ${data.agenda?.version ?? "—"}`),
+          create("h3", "detail-title", data.project?.goal || "尚未命名的研究"),
+        );
+        const counts = create("div", "overview-number");
+        for (const [status, label] of [
+          ["proposed", "待开展"],
+          ["open", "未归档"],
+          ["closed", "已归档"],
+        ]) {
+          const item = create("div");
+          item.append(
+            create("strong", "", nodes.filter((n) => n.status === status).length),
+            create("span", "", label),
+          );
+          counts.append(item);
+        }
+        body.append(
+          counts,
+          create("p", "stage-note", "节点记录一段工作。阶段可以结束，问题可以继续。"),
+        );
+        const agenda = section(body, "研究问题", array(data.agenda?.questions).length);
+        for (const q of array(data.agenda?.questions)) {
+          const item = create("div", "question");
+          item.append(create("p", "question-id", q.id));
+          prose(item, q.text);
+          agenda.append(item);
+        }
+        if (!array(data.agenda?.questions).length) prose(agenda, data.agenda?.text, "议程尚未记录");
+        const notes = section(body, "研究笔记");
+        prose(notes, data.notes?.text, "研究笔记会随着探索逐步积累。");
+        const usage = section(body, "投入记录");
+        const b = data.budget || {};
+        prose(
+          usage,
+          `已记账 ${compact(b.spent)} token · 预占 ${compact(b.held ?? b.reserved)} token\n未核实用量 ${b.unknown_count ?? "—"} 次；未知用量不按零计算。`,
+        );
+        renderGraph();
+      }
+      function renderDetails(reference) {
+        if (!selected || !nodeMap.has(selected)) {
+          showOverview();
+          return;
+        }
+        const node = nodeMap.get(selected),
+          state = nodeState(node),
+          body = $("details-body"),
+          result = node.result || {},
+          scroll = body.scrollTop;
+        const openVersions = new Set(
+          [...body.querySelectorAll(".product[data-ref]")]
+            .filter((item) => item.querySelector(".artifact-version")?.open)
+            .map((item) => item.dataset.ref),
+        );
+        const focusedVersion =
+          document.activeElement?.tagName === "SUMMARY"
+            ? document.activeElement.closest(".product")?.dataset.ref
+            : null;
+        $("details-eyebrow").textContent = "EXPLORATION DETAIL";
+        $("details-heading").textContent = node.id;
+        body.replaceChildren();
+        const meta = create("div", "detail-meta");
+        meta.append(
+          badge(
+            stateLabels[state] || state,
+            ["unknown", "failed", "interrupted"].includes(state)
+              ? "amber"
+              : state === "running"
+                ? "green"
+                : "",
+          ),
+          create("span", "", `${plain(node.question)} · 议程 v${node.agenda_version ?? "—"}`),
+        );
+        body.append(meta, create("h3", "detail-title", summary(node)));
+        body.append(
+          create(
+            "p",
+            "stage-note",
+            node.status === "closed"
+              ? "已归档：这段工作已结束，不代表问题已经解决。"
+              : ["failed", "interrupted", "unknown"].includes(state)
+                ? "执行异常不代表研究得到负面结论；已有工作仍可接手。"
+                : "允许交接半成品，不要求本节点给出最终结论。",
+          ),
+        );
+        const switches = create("div", "path-switch");
+        for (const [value, label] of [
+          ["both", "上下游"],
+          ["upstream", "追溯来源"],
+          ["downstream", "后续探索"],
+        ]) {
+          const button = create("button", pathMode === value ? "active" : "", label);
+          button.setAttribute("aria-pressed", pathMode === value);
+          button.addEventListener("click", () => {
+            pathMode = value;
+            renderDetails();
+            renderGraph();
+          });
+          switches.append(button);
+        }
+        body.append(switches);
+        const question = section(body, "所研究的问题");
+        prose(question, questionText(node));
+        const plan = section(body, "本次计划");
+        prose(plan, node.plan);
+        const inputs = section(body, "使用的历史材料", array(node.inputs).length);
+        for (const item of array(node.inputs)) {
+          const block = create("div", "reference");
+          block.append(refButton(item.ref));
+          prose(block, item.use);
+          inputs.append(block);
+        }
+        if (!array(node.inputs).length) inputs.append(create("p", "muted", "尚未引用历史节点"));
+        const products = section(body, "阶段产物", array(result.products).length);
+        for (const product of array(result.products)) {
+          const block = create("article", "product");
+          block.dataset.ref = `${node.id}/result#${product.id}`;
+          const heading = create("div", "item-heading");
+          heading.append(
+            create("span", "item-id", product.id),
+            badge(
+              product.status === "partial"
+                ? "半成品"
+                : product.status === "usable"
+                  ? "可使用"
+                  : "已归档",
+              product.status === "partial" ? "amber" : "",
+            ),
+          );
+          block.append(heading);
+          prose(block, product.interface, "用途尚未说明");
+          if (array(product.gaps).length) {
+            block.append(create("p", "field-label", "尚未完成"));
+            list(block, product.gaps);
+          }
+          const version = create("details", "artifact-version");
+          version.open = openVersions.has(block.dataset.ref);
+          version.append(
+            create("summary", "", "版本与归档位置"),
+            create(
+              "code",
+              "",
+              `${product.kind === "directory" ? "目录" : "文件"}\n${plain(product.version)}\n${plain(product.path)}`,
+            ),
+          );
+          block.append(version);
+          products.append(block);
+          if (focusedVersion === block.dataset.ref)
+            version.querySelector("summary").focus({ preventScroll: true });
+        }
+        if (!array(result.products).length)
+          products.append(
+            create(
+              "p",
+              "muted",
+              node.status === "closed" ? "本阶段未发布产物" : "阶段产物尚未发布",
+            ),
+          );
+        const findings = section(body, "发现与依据", array(result.findings).length);
+        for (const finding of array(result.findings)) {
+          const block = create("article", "finding"),
+            ref = `${node.id}/result#${finding.id}`;
+          block.dataset.ref = ref;
+          block.append(create("p", "item-id", finding.id));
+          prose(block, finding.text);
+          if (finding.conditions) {
+            block.append(create("p", "field-label", "适用条件"));
+            prose(block, finding.conditions);
+          }
+          block.append(create("p", "field-label", "证据"));
+          for (const evidence of array(finding.evidence)) {
+            const div = create("div");
+            div.append(
+              refButton(
+                typeof evidence === "string" && evidence.startsWith("#")
+                  ? node.id + "/result" + evidence
+                  : evidence,
+              ),
+            );
+            block.append(div);
+          }
+          if (finding.revises) {
+            const revision = create("div", "revision-note");
+            revision.append(create("p", "", "对先前发现提出修订"), refButton(finding.revises));
+            block.append(revision);
+          }
+          for (const other of nodes)
+            for (const newer of array(other.result?.findings))
+              if (newer.revises === ref) {
+                const revision = create("div", "revision-note");
+                revision.append(
+                  create("p", "", "此发现有后续修订，旧记录仍然保留"),
+                  refButton(`${other.id}/result#${newer.id}`),
+                );
+                block.append(revision);
+              }
+          findings.append(block);
+        }
+        if (!array(result.findings).length)
+          findings.append(create("p", "muted", "暂无发现；空发现是合法的阶段结果。"));
+        if (node.status === "closed") {
+          const close = section(body, "阶段交接");
+          prose(close, result.close_reason);
+          if (result.limitations) {
+            close.append(create("p", "field-label", "限制与未决事项"));
+            prose(close, result.limitations);
+          }
+          if (array(result.next).length) {
+            close.append(create("p", "field-label", "建议的下一步"));
+            list(close, result.next, "next-list");
+          }
+        }
+        const attempts = attemptMap.get(node.id) || [];
+        if (attempts.length) {
+          const activity = section(body, "执行记录", attempts.length);
+          for (const attempt of attempts.slice(-4).reverse()) {
+            const item = create("div", "attempt"),
+              left = create("div"),
+              right = create("div", "attempt-cost");
+            left.append(
+              create(
+                "div",
+                "attempt-id",
+                `${attempt.id} · ${stateLabels[attempt.state] || attempt.state}`,
+              ),
+              create("p", "attempt-time", date(attempt.created_at)),
+            );
+            right.append(
+              create(
+                "div",
+                "",
+                number(attempt.cost) === null ? "用量待核实" : `${compact(attempt.cost)} token`,
+              ),
+              create(
+                "p",
+                "attempt-time",
+                attempt.cost_kind === "actual"
+                  ? "实际用量"
+                  : attempt.cost_kind === "estimated"
+                    ? "估算用量"
+                    : "保留预算占用",
+              ),
+            );
+            item.append(left, right);
+            activity.append(item);
+          }
+          const progress = attempts[attempts.length - 1].progress;
+          if (progress) {
+            const progressSection = section(body, "当前进度");
+            prose(progressSection, progress);
+          }
+        }
+        body.scrollTop = scroll;
+        if (reference) {
+          const item = [...body.querySelectorAll("[data-ref]")].find(
+            (el) => el.dataset.ref === reference,
+          );
+          if (item) requestAnimationFrame(() => item.scrollIntoView({ block: "nearest" }));
+        }
+      }
+      function selectNode(id, { reference = null, center = false } = {}) {
+        if (!nodeMap.has(id)) return;
+        if (!visible.has(id)) {
+          clearFilters(false);
+          notify("已清除筛选，显示引用所在节点");
+        }
+        const changed = selected !== id;
+        selected = id;
+        if (changed) $("details-body").scrollTop = 0;
+        $("details").classList.add("mobile-open");
+        renderDetails(reference);
+        renderGraph();
+        if (center) centerNode(id);
+        announce(`已选择 ${id}，${summary(nodeMap.get(id))}`);
+      }
+      function edgePath(edge) {
+        const source = positions.get(edge.source),
+          target = positions.get(edge.target),
+          lane = edge.lane || 0,
+          x1 = source.x + source.width,
+          y1 = source.y + source.height / 2 + lane,
+          x2 = target.x,
+          y2 = target.y + target.height / 2 + lane;
+        if (edge.source === edge.target)
+          return `M ${x1 - 30} ${source.y} C ${x1 + 80} ${source.y - 62 - lane * 2},${source.x - 60} ${source.y - 62 - lane * 2},${source.x + 30} ${source.y}`;
+        if (x2 <= x1) {
+          const top = Math.min(source.y, target.y) - 37 - lane * 2;
+          return `M ${x1} ${y1} C ${x1 + 66} ${y1},${x1 + 66} ${top},${x1 + 5} ${top} L ${x2 - 25} ${top} C ${x2 - 65} ${top},${x2 - 65} ${y2},${x2} ${y2}`;
+        }
+        const middle = (x1 + x2) / 2;
+        return `M ${x1} ${y1} C ${middle} ${y1},${middle} ${y2},${x2} ${y2}`;
+      }
+      function renderGraph() {
+        const canvas = $("canvas"),
+          hadFocus = document.activeElement?.classList?.contains("node"),
+          focusedId = hadFocus ? document.activeElement.dataset.node : null;
+        canvas.replaceChildren();
+        const defs = svg("defs"),
+          filter = svg("filter", {
+            id: "card-shadow",
+            x: "-15%",
+            y: "-15%",
+            width: "130%",
+            height: "140%",
+          });
+        filter.append(
+          svg("feDropShadow", {
+            dx: 0,
+            dy: 3,
+            stdDeviation: 4,
+            "flood-color": "#344a28",
+            "flood-opacity": 0.045,
+          }),
+        );
+        defs.append(filter);
+        for (const [id, color] of [
+          ["arrow", "#a8b9a8"],
+          ["arrow-active", "#245d47"],
+          ["arrow-revision", "#bd9969"],
+        ]) {
+          const marker = svg("marker", {
+            id,
+            viewBox: "0 0 8 8",
+            refX: 7.5,
+            refY: 4,
+            markerWidth: 6,
+            markerHeight: 6,
+            orient: "auto-start-reverse",
+            markerUnits: "userSpaceOnUse",
+          });
+          marker.append(
+            svg("path", {
+              d: "M 0 1 L 7 4 L 0 7",
+              fill: "none",
+              stroke: color,
+              "stroke-width": 1.2,
+            }),
+          );
+          defs.append(marker);
+        }
+        canvas.append(defs);
+        group = svg("g");
+        canvas.append(group);
+        const related = new Set(selected ? [selected] : []);
+        if (selected && adjacency) {
+          if (pathMode !== "downstream")
+            for (const id of GraphLogic.reach(selected, adjacency.incoming)) related.add(id);
+          if (pathMode !== "upstream")
+            for (const id of GraphLogic.reach(selected, adjacency.outgoing)) related.add(id);
+        }
+        for (const edge of visualEdges) {
+          if (!visible.has(edge.source) || !visible.has(edge.target)) continue;
+          const active = selected && related.has(edge.source) && related.has(edge.target),
+            revision = edge.kind === "revision";
+          const element = svg("path", {
+            d: edgePath(edge),
+            class: `edge${revision ? " revision" : ""}${active ? " active" : ""}${selected && !active ? " dim" : ""}`,
+            "marker-end": `url(#${revision ? "arrow-revision" : active ? "arrow-active" : "arrow"})`,
+          });
+          element.append(
+            svg(
+              "title",
+              {},
+              `${edge.source} → ${edge.target}\n${revision ? "后续修订（不自动判废旧发现）" : "使用历史材料"}\n${edge.references.map((item) => `${plain(item.ref)}${item.finding_ref ? " → " + plain(item.finding_ref) : ""}${item.use ? "\n" + plain(item.use) : ""}`).join("\n\n")}`,
+            ),
+          );
+          const hit = svg("path", { d: edgePath(edge), class: "edge-hit" });
+          hit.append(element.querySelector("title").cloneNode(true));
+          group.append(hit, element);
+        }
+        for (const node of nodes) {
+          if (!visible.has(node.id)) continue;
+          const p = positions.get(node.id),
+            state = nodeState(node),
+            attention = ["unknown", "failed", "interrupted"].includes(state);
+          const element = svg("g", {
+            class: `node${selected === node.id ? " selected" : selected ? (related.has(node.id) ? " related" : " dim") : ""}`,
+            transform: `translate(${p.x} ${p.y})`,
+            tabindex: 0,
+            role: "button",
+            "aria-label": `${node.id}，${stateLabels[state] || state}，${summary(node)}`,
+            "aria-pressed": selected === node.id,
+          });
+          element.dataset.node = node.id;
+          element.append(
+            svg("title", {}, summary(node)),
+            svg("rect", { class: "card", width: p.width, height: p.height, rx: 7 }),
+          );
+          element.append(
+            svg("text", { x: 17, y: 24, class: "node-id" }, node.id),
+            svg("rect", {
+              x: p.width - 72,
+              y: 12,
+              width: 56,
+              height: 20,
+              rx: 3,
+              class: `node-status-${state === "reserved" ? "proposed" : state}`,
+            }),
+            svg(
+              "text",
+              {
+                x: p.width - 44,
+                y: 26,
+                "text-anchor": "middle",
+                class: `node-state ${attention ? "warning-label" : state === "running" ? "running-label" : "state-label"}`,
+              },
+              stateLabels[state] || state,
+            ),
+          );
+          labelLines(cardSummary(node)).forEach((line, index) =>
+            element.append(svg("text", { x: 17, y: 53 + index * 20, class: "node-title" }, line)),
+          );
+          const products = array(node.result?.products),
+            findings = array(node.result?.findings),
+            partial = products.some((p) => p.status === "partial");
+          element.append(
+            svg(
+              "text",
+              { x: 17, y: 99, class: "node-meta" },
+              `${plain(node.question)}  ·  ${products.length} 产物  ${findings.length} 发现`,
+            ),
+          );
+          if (partial)
+            element.append(
+              svg("circle", { cx: p.width - 21, cy: 96, r: 3, class: "partial-mark" }),
+              svg("title", {}, "包含尚未完成的产物"),
+            );
+          element.addEventListener("click", () => selectNode(node.id));
+          element.addEventListener("keydown", (event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              selectNode(node.id);
+            } else if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
+              event.preventDefault();
+              const next = (event.key === "ArrowRight" ? adjacency.outgoing : adjacency.incoming)
+                .get(node.id)
+                ?.find((id) => visible.has(id));
+              if (next) {
+                selectNode(next);
+                [...canvas.querySelectorAll(".node")]
+                  .find((el) => el.dataset.node === next)
+                  ?.focus();
+              }
+            }
+          });
+          group.append(element);
+        }
+        applyView();
+        if (focusedId)
+          [...canvas.querySelectorAll(".node")]
+            .find((el) => el.dataset.node === focusedId)
+            ?.focus({ preventScroll: true });
+      }
+      function filterNodes(autoFit = true) {
+        const query = $("search").value.trim(),
+          question = $("question-filter").value,
+          status = $("status-filter").value,
+          attention = new Set(
+            nodes
+              .filter((n) => ["unknown", "failed", "interrupted"].includes(nodeState(n)))
+              .map((n) => n.id),
+          );
+        visible = new Set(
+          nodes
+            .filter((n) => GraphLogic.matches(n, query, question, status, attention))
+            .map((n) => n.id),
+        );
+        const filtered = !!(query || question || status);
+        $("clear-filter").hidden = !filtered;
+        $("empty-state").hidden = visible.size > 0;
+        $("empty-title").textContent = nodes.length ? "没有匹配的探索" : "第一段探索，从这里开始";
+        $("empty-description").textContent = nodes.length
+          ? "试试其他关键词，或清除问题与状态筛选。"
+          : "课题已经建立。新的探索发布后，分支、引用与汇聚会显示在这张地图上。";
+        $("empty-clear").hidden = !nodes.length;
+        const edgeCount = visualEdges.filter(
+            (e) => visible.has(e.source) && visible.has(e.target),
+          ).length,
+          referenceCount = edges.filter(
+            (e) => visible.has(e.source) && visible.has(e.target),
+          ).length;
+        $("map-count").textContent =
+          `${visible.size}${filtered ? " / " + nodes.length : ""} 个探索  ·  ${edgeCount} 条关联${referenceCount > edgeCount ? " · " + referenceCount + " 项引用" : ""}`;
+        renderGraph();
+        if (autoFit) fit();
+      }
+      function clearFilters(autoFit = true) {
+        $("search").value = "";
+        $("question-filter").value = "";
+        $("status-filter").value = "";
+        filterNodes(autoFit);
+      }
+      function install(snapshot) {
+        if (!snapshot || typeof snapshot !== "object" || !Array.isArray(snapshot.nodes))
+          throw new Error("研究数据格式无效");
+        const focused = document.activeElement,
+          activeNode = focused?.dataset?.node,
+          scroll = $("details-body").scrollTop;
+        data = snapshot;
+        nodes = array(snapshot.nodes).filter((n) => n && typeof n.id === "string");
+        nodeMap = new Map(nodes.map((n) => [n.id, n]));
+        edges = array(snapshot.edges).filter(
+          (e) => e && nodeMap.has(e.source) && nodeMap.has(e.target),
+        );
+        visualEdges = GraphLogic.aggregateEdges(edges);
+        attemptMap = new Map();
+        for (const attempt of array(snapshot.attempts)) {
+          if (!attempt?.node_id) continue;
+          if (!attemptMap.has(attempt.node_id)) attemptMap.set(attempt.node_id, []);
+          attemptMap.get(attempt.node_id).push(attempt);
+        }
+        for (const attempts of attemptMap.values())
+          attempts.sort(
+            (a, b) =>
+              plain(a.created_at).localeCompare(plain(b.created_at)) ||
+              plain(a.id).localeCompare(plain(b.id), "en", { numeric: true }),
+          );
+        adjacency = GraphLogic.graph(nodes, edges);
+        positions = GraphLogic.layout(nodes, edges).positions;
+        $("goal").textContent = plain(data.project?.goal || "新的研究课题");
+        $("goal").title = plain(data.project?.goal);
+        const budget = data.budget || {};
+        $("budget-main").textContent =
+          `${compact(budget.spent)} / ${compact(budget.limit ?? budget.total)}`;
+        $("budget-sub").textContent =
+          `预占 ${compact(budget.held ?? budget.reserved)} · 未核实 ${budget.unknown_count ?? "—"} 次`;
+        const questionFilter = $("question-filter"),
+          priorQuestion = questionFilter.value;
+        questionFilter.replaceChildren(create("option", "", "全部问题"));
+        questionFilter.firstChild.value = "";
+        for (const question of array(data.agenda?.questions)) {
+          const option = create("option", "", `${plain(question.id)} · ${plain(question.text)}`);
+          option.value = plain(question.id);
+          questionFilter.append(option);
+        }
+        const currentQuestions = new Set(array(data.agenda?.questions).map((q) => q.id));
+        for (const id of [...new Set(nodes.map((n) => n.question).filter(Boolean))].sort())
+          if (!currentQuestions.has(id)) {
+            const option = create("option", "", `${plain(id)} · 历史问题`);
+            option.value = plain(id);
+            questionFilter.append(option);
+          }
+        questionFilter.value = priorQuestion;
+        if (!nodeMap.has(selected)) selected = null;
+        filterNodes(false);
+        if (selected) renderDetails();
+        else showOverview();
+        $("details-body").scrollTop = scroll;
+        if (firstDraw) {
+          requestAnimationFrame(fit);
+          firstDraw = false;
+        }
+        if (activeNode)
+          [...$("canvas").querySelectorAll(".node")]
+            .find((el) => el.dataset.node === activeNode)
+            ?.focus({ preventScroll: true });
+      }
+      $("search").addEventListener("input", () => filterNodes());
+      $("question-filter").addEventListener("change", () => filterNodes());
+      $("status-filter").addEventListener("change", () => filterNodes());
+      $("clear-filter").addEventListener("click", () => clearFilters());
+      $("empty-clear").addEventListener("click", () => clearFilters());
+      $("fit").addEventListener("click", fit);
+      $("zoom-in").addEventListener("click", () => zoom(1.2));
+      $("zoom-out").addEventListener("click", () => zoom(1 / 1.2));
+      $("overview").addEventListener("click", () => {
+        $("details").classList.add("mobile-open");
+        showOverview();
+      });
+      $("close-details").addEventListener("click", () => {
+        $("details").classList.remove("mobile-open");
+        showOverview();
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          $("details").classList.remove("mobile-open");
+          showOverview();
+        }
+      });
+      let drag = null;
+      $("canvas").addEventListener("pointerdown", (event) => {
+        if (event.button !== 0 || event.target.closest(".node")) return;
+        drag = {
+          x: event.clientX,
+          y: event.clientY,
+          viewX: view.x,
+          viewY: view.y,
+          pointer: event.pointerId,
+        };
+        $("canvas").setPointerCapture(event.pointerId);
+        $("canvas").classList.add("dragging");
+      });
+      $("canvas").addEventListener("pointermove", (event) => {
+        if (!drag || drag.pointer !== event.pointerId) return;
+        view.x = drag.viewX + event.clientX - drag.x;
+        view.y = drag.viewY + event.clientY - drag.y;
+        applyView();
+      });
+      function endDrag() {
+        drag = null;
+        $("canvas").classList.remove("dragging");
+      }
+      $("canvas").addEventListener("pointerup", endDrag);
+      $("canvas").addEventListener("pointercancel", endDrag);
+      $("canvas").addEventListener(
+        "wheel",
+        (event) => {
+          event.preventDefault();
+          const rect = $("canvas").getBoundingClientRect();
+          zoom(
+            Math.exp(-event.deltaY * 0.0015),
+            event.clientX - rect.left,
+            event.clientY - rect.top,
+          );
+        },
+        { passive: false },
+      );
+      let fittedViewport = null;
+      new ResizeObserver(() => {
+        const width = $("canvas").clientWidth,
+          height = $("canvas").clientHeight;
+        if (!width || !height) return;
+        const resized =
+          !fittedViewport ||
+          Math.abs(width - fittedViewport.width) >= Math.max(48, fittedViewport.width * 0.12) ||
+          Math.abs(height - fittedViewport.height) >= Math.max(48, fittedViewport.height * 0.12);
+        if (resized) {
+          // Compare with the last fitted size so gradual window resizing also
+          // crosses the threshold. Data polling alone leaves the view intact.
+          fittedViewport = { width, height };
+          requestAnimationFrame(fit);
+        }
+      }).observe($("canvas"));
+      async function refresh() {
+        const controller = new AbortController(),
+          timeout = setTimeout(() => controller.abort(), 2500);
+        try {
+          const response = await fetch(graphEndpoint, {
+            cache: "no-store",
+            signal: controller.signal,
+            credentials: "same-origin",
+          });
+          if (!response.ok) throw new Error("读取失败");
+          const snapshot = await response.json(),
+            payload = JSON.stringify(snapshot);
+          if (payload !== lastPayload) {
+            install(snapshot);
+            lastPayload = payload;
+          }
+          lastGood = Date.now();
+          updateConnection(true);
+        } catch (error) {
+          updateConnection(false);
+        } finally {
+          clearTimeout(timeout);
+          setTimeout(refresh, 3000);
+        }
+      }
+      try {
+        const initial = JSON.parse($("ari-graph-data").textContent);
+        install(initial);
+        lastPayload = JSON.stringify(initial);
+        lastGood = Date.now();
+        updateConnection(true);
+      } catch (error) {
+        $("empty-state").hidden = false;
+        $("empty-title").textContent = "研究记录暂时无法读取";
+        $("empty-description").textContent = "请重新导出视图，或等待实时连接恢复。";
+        updateConnection(false);
+      }
+      if (LIVE) setTimeout(refresh, 3000);
+    </script>
+  </body>
+</html>

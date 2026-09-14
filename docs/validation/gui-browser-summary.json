@@ -1,0 +1,39 @@
+{
+  "passed": true,
+  "run_at": "2026-09-13T16:14:40.906560+00:00",
+  "model_calls": 0,
+  "real_gui": true,
+  "real_workbench": true,
+  "real_production_scheduler": true,
+  "backend": "delayed deterministic scripted_backend.py",
+  "native_picker": "injected paths; no operating-system dialog opened",
+  "checks": [
+    "empty home renders without creating or launching a project",
+    "invalid material shows an error, preserves fields and creates no project",
+    "Chinese goal/material/budget/concurrency are stored; create produces no attempt and iframe is empty",
+    "First coordinator activity is visible before any research node exists",
+    "Start runs the real scheduler with fake subprocesses; rapid duplicate click sends one start and creates one controller generation",
+    "Pause reaches the production control hook and drains existing fake work without discarding its node",
+    "Resume starts a second real controller generation; Stop interrupts and settles active fake-backend processes",
+    "Polling preserves in-progress settings edits; saving updates persistent notes and budget",
+    "Refresh preserves selected project hash and the correct iframe",
+    "Creating at an existing project path is rejected without changing that project",
+    "Switching between projects changes the iframe and leaves the second project unstarted",
+    "Injected native-folder picker opens an existing external project without changing or starting it",
+    "Offline export downloads a self-contained graph and renders its real nodes without backend configuration",
+    "Home, create dialog and project view have no horizontal page overflow at 390 px; map nodes stay inside the resized viewport",
+    "No JavaScript page exceptions or off-origin network requests"
+  ],
+  "js_errors": [],
+  "browser": "151.0.7922.34",
+  "projects_created": 2,
+  "existing_project_opened": true,
+  "first_project_nodes": 1,
+  "first_project_attempt_states": [
+    "completed",
+    "completed",
+    "interrupted"
+  ],
+  "scheduler_generations": 2,
+  "first_project_control": "stopped"
+}

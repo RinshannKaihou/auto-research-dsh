@@ -1,0 +1,1917 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>研究工作台 · Auto Research</title>
+    <style>
+      :root {
+        --paper: #f6f5ef;
+        --surface: #fffefa;
+        --ink: #213e35;
+        --text: #384639;
+        --muted: #82907e;
+        --line: #dce3d5;
+        --green: #285d47;
+        --pale: #edf2e8;
+        --amber: #a17437;
+        --red: #a35243;
+        --sans: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+        --serif: "Songti SC", "Noto Serif CJK SC", Georgia, serif;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font: 13px/1.7 var(--sans);
+        background: var(--paper);
+        color: var(--text);
+      }
+      button,
+      input,
+      textarea,
+      select {
+        font: inherit;
+      }
+      button {
+        cursor: pointer;
+        color: inherit;
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: wait;
+      }
+      input,
+      textarea {
+        color: var(--ink);
+      }
+      button:focus-visible,
+      input:focus-visible,
+      textarea:focus-visible,
+      summary:focus-visible,
+      a:focus-visible {
+        outline: 2px solid var(--green);
+        outline-offset: 3px;
+      }
+      button {
+        border: 0;
+        background: none;
+      }
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
+      }
+      [hidden] {
+        display: none !important;
+      }
+      .app {
+        min-height: 100dvh;
+      }
+      .masthead {
+        height: 89px;
+        padding: 0 38px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        border-bottom: 1px solid var(--line);
+        background: var(--surface);
+        gap: 20px;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+      }
+      .mark {
+        width: 31px;
+        height: 39px;
+        flex-shrink: 0;
+      }
+      .brand-name {
+        font: 23px/1.2 var(--serif);
+        font-weight: 600;
+        letter-spacing: 1.5px;
+      }
+      .eyebrow {
+        font-size: 9px;
+        letter-spacing: 2.2px;
+        color: var(--green);
+        font-weight: 500;
+        margin-bottom: 5px;
+      }
+      .header-meta {
+        font-size: 11px;
+        display: flex;
+        gap: 9px;
+        align-items: center;
+        color: var(--muted);
+      }
+      .connection-dot {
+        height: 6px;
+        width: 6px;
+        border-radius: 50%;
+        background: #518264;
+      }
+      .connection-dot.error {
+        background: #b27d3f;
+      }
+      .home {
+        max-width: 1160px;
+        margin: auto;
+        padding: 56px 40px 40px;
+      }
+      .home-heading {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 20px;
+        margin-bottom: 32px;
+      }
+      .home h1 {
+        font: 34px/1.3 var(--serif);
+        font-weight: 500;
+        color: var(--ink);
+        margin-bottom: 11px;
+      }
+      .home-sub {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .button {
+        min-height: 38px;
+        padding: 8px 16px;
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        font-size: 12px;
+        background: var(--surface);
+        display: inline-flex;
+        gap: 7px;
+        align-items: center;
+        justify-content: center;
+        text-decoration: none;
+        color: var(--text);
+        white-space: nowrap;
+      }
+      .button:hover {
+        border-color: #a8bca2;
+        background: #fafcf4;
+      }
+      .button.primary {
+        background: var(--green);
+        border-color: var(--green);
+        color: #fffefa;
+      }
+      .button.primary:hover {
+        background: #1d4d39;
+      }
+      .button.quiet {
+        border-color: transparent;
+        background: none;
+        color: var(--muted);
+      }
+      .button.quiet:hover {
+        color: var(--green);
+        background: var(--pale);
+      }
+      .button.danger {
+        color: var(--red);
+        border-color: #e4d6c9;
+      }
+      .button.small {
+        min-height: 32px;
+        padding: 5px 11px;
+        font-size: 11px;
+      }
+      .plus {
+        font: 19px/1 var(--sans);
+        margin-right: 2px;
+      }
+      .project-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 17px;
+      }
+      .project-card {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        text-align: left;
+        padding: 25px 26px 20px;
+        min-height: 212px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+        transition:
+          border-color 0.15s,
+          transform 0.15s;
+        box-shadow: 0 4px 15px #273e2503;
+      }
+      .project-card:hover {
+        border-color: #91ac89;
+        transform: translateY(-2px);
+      }
+      .card-heading {
+        width: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        margin-bottom: 15px;
+      }
+      .card-index {
+        font:
+          10px ui-monospace,
+          SFMono-Regular,
+          Consolas,
+          monospace;
+        color: #98a58d;
+      }
+      .badge {
+        font-size: 10px;
+        border: 1px solid #dbe4d3;
+        padding: 2px 8px;
+        border-radius: 3px;
+        background: #f1f5eb;
+        color: #718261;
+        white-space: nowrap;
+      }
+      .badge.running {
+        color: #407655;
+        background: #edf5e8;
+      }
+      .badge.attention {
+        color: #9c753b;
+        background: #faf2e6;
+        border-color: #eaddc4;
+      }
+      .project-card h2 {
+        font: 21px/1.4 var(--serif);
+        color: var(--ink);
+        font-weight: 500;
+        overflow-wrap: anywhere;
+        margin-bottom: 9px;
+      }
+      .card-goal {
+        font-size: 12px;
+        color: #839176;
+        line-height: 1.85;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+        overflow-wrap: anywhere;
+      }
+      .card-footer {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        border-top: 1px solid #edf0e6;
+        padding-top: 14px;
+        margin-top: auto;
+        width: 100%;
+        font-size: 10px;
+        color: #8a977e;
+      }
+      .card-footer span:first-child {
+        padding-top: 10px;
+      }
+      .card-arrow {
+        font-size: 19px;
+        color: #5b7c4c;
+      }
+      .empty-projects {
+        padding: 49px 36px;
+        border: 1px dashed #bfcfba;
+        border-radius: 8px;
+        display: flex;
+        gap: 30px;
+        align-items: center;
+        background: #fafbf3;
+        min-height: 235px;
+      }
+      .empty-illustration {
+        width: 100px;
+        height: 99px;
+        flex-shrink: 0;
+        color: #779770;
+      }
+      .empty-projects h2 {
+        font: 23px var(--serif);
+        color: #54744b;
+        font-weight: 500;
+        margin-bottom: 11px;
+      }
+      .empty-projects p {
+        font-size: 12px;
+        color: #8b987e;
+        line-height: 1.9;
+        max-width: 430px;
+      }
+      .home-bottom {
+        margin-top: 30px;
+        display: flex;
+        justify-content: space-between;
+        gap: 18px;
+        align-items: center;
+      }
+      .workspace-location {
+        font-size: 10px;
+        color: #9aa48e;
+        overflow-wrap: anywhere;
+        max-width: 65%;
+      }
+      .workspace-location code {
+        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+        font-size: 10px;
+      }
+      .open-existing {
+        margin-top: 15px;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 21px;
+        max-width: 650px;
+        margin-left: auto;
+      }
+      .open-existing .field {
+        margin-bottom: 12px;
+      }
+      .inline-row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .inline-row input {
+        flex: 1;
+        min-width: 0;
+      }
+      .field {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        margin-bottom: 18px;
+      }
+      .field label,
+      .field-label {
+        font-size: 12px;
+        color: #49663d;
+        font-weight: 500;
+      }
+      .required {
+        font-size: 10px;
+        font-weight: 400;
+        color: #8f9b81;
+        margin-left: 6px;
+      }
+      .field input,
+      .field textarea,
+      .resource-input {
+        width: 100%;
+        padding: 9px 11px;
+        border: 1px solid #d8e1cf;
+        border-radius: 5px;
+        background: #fffefa;
+        font-size: 12px;
+        line-height: 1.7;
+      }
+      .field textarea {
+        resize: vertical;
+        min-height: 102px;
+      }
+      .field input::placeholder,
+      .field textarea::placeholder,
+      .resource-input::placeholder {
+        color: #a4ac99;
+      }
+      .field input:focus,
+      .field textarea:focus,
+      .resource-input:focus {
+        border-color: #91a884;
+      }
+      .hint {
+        font-size: 10px;
+        color: #94a086;
+        line-height: 1.75;
+        overflow-wrap: anywhere;
+      }
+      .split-fields {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 17px;
+      }
+      .resource-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        margin: 10px 0;
+      }
+      .resource-row {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+      }
+      .resource-input {
+        flex: 1;
+        min-width: 0;
+        font:
+          11px/1.7 ui-monospace,
+          SFMono-Regular,
+          Consolas,
+          monospace;
+        padding: 8px 9px;
+      }
+      .resource-row .button {
+        padding: 6px 8px;
+        min-height: 33px;
+        font-size: 10px;
+      }
+      .remove-resource {
+        width: 25px;
+        height: 30px;
+        flex-shrink: 0;
+        color: #8f9b81;
+        font-size: 18px;
+      }
+      .remove-resource:hover {
+        color: var(--red);
+      }
+      .add-resource {
+        font-size: 11px;
+        color: var(--green);
+        padding: 4px 0;
+        margin-bottom: 4px;
+      }
+      .error {
+        border: 1px solid #ecd3c7;
+        border-left: 3px solid #b87962;
+        border-radius: 4px;
+        color: #975f4a;
+        background: #fcf4ea;
+        padding: 11px 13px;
+        font-size: 12px;
+        line-height: 1.85;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        margin: 13px 0;
+      }
+      .notice {
+        border: 1px solid #d9e5d0;
+        border-radius: 5px;
+        background: #f0f6e9;
+        padding: 10px 14px;
+        color: #668456;
+        font-size: 11px;
+        line-height: 1.8;
+        overflow-wrap: anywhere;
+      }
+      .create-dialog {
+        border: 1px solid #cfdcc7;
+        border-radius: 10px;
+        padding: 0;
+        background: var(--surface);
+        width: min(665px, calc(100vw - 30px));
+        max-height: calc(100dvh - 50px);
+        box-shadow: 0 24px 100px #1a322b28;
+        color: var(--text);
+      }
+      .create-dialog::backdrop {
+        background: #1d352b40;
+        backdrop-filter: blur(3px);
+      }
+      .dialog-heading {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 24px 29px 19px;
+        border-bottom: 1px solid var(--line);
+        gap: 15px;
+      }
+      .dialog-heading h2 {
+        font: 26px var(--serif);
+        font-weight: 500;
+        color: var(--ink);
+      }
+      .dialog-heading p {
+        font-size: 11px;
+        color: var(--muted);
+        margin-top: 6px;
+      }
+      .icon-close {
+        font: 24px/1 var(--sans);
+        color: #92a086;
+        padding: 5px;
+      }
+      .dialog-body {
+        padding: 25px 29px 0;
+        max-height: calc(100dvh - 242px);
+        overflow-y: auto;
+        scrollbar-width: thin;
+        scrollbar-color: #cbd8bf transparent;
+      }
+      .advanced {
+        border-top: 1px solid #e3e9dc;
+        margin-top: 17px;
+        padding: 14px 0 0;
+        font-size: 11px;
+        color: #7e906e;
+      }
+      .advanced summary {
+        cursor: pointer;
+        width: fit-content;
+        margin-bottom: 15px;
+      }
+      .advanced[open] summary {
+        color: var(--green);
+      }
+      .dialog-footer {
+        padding: 18px 29px 22px;
+        border-top: 1px solid var(--line);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+        margin-top: 21px;
+        background: var(--surface);
+      }
+      .dialog-footer .hint {
+        max-width: 300px;
+      }
+      .project-page {
+        height: calc(100dvh - 89px);
+        min-height: 420px;
+        display: flex;
+        flex-direction: column;
+      }
+      .project-top {
+        padding: 20px 30px 17px;
+        background: var(--surface);
+        border-bottom: 1px solid var(--line);
+        flex-shrink: 0;
+      }
+      .project-navigation {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 12px;
+        gap: 16px;
+      }
+      .back-button {
+        font-size: 11px;
+        color: #7e9170;
+        padding: 0;
+      }
+      .back-button:hover {
+        color: var(--green);
+      }
+      .continuity-note {
+        font-size: 10px;
+        color: #95a388;
+      }
+      .project-heading-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 24px;
+      }
+      .project-identity {
+        min-width: 0;
+        flex: 1;
+      }
+      .project-title-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        min-width: 0;
+      }
+      .project-title-row h1 {
+        font: 25px/1.35 var(--serif);
+        font-weight: 500;
+        color: var(--ink);
+        overflow-wrap: anywhere;
+      }
+      .project-goal {
+        font-size: 11px;
+        color: #8b987d;
+        margin-top: 7px;
+        max-width: 720px;
+        display: -webkit-box;
+        -webkit-line-clamp: 1;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+        overflow-wrap: anywhere;
+      }
+      .project-actions {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-shrink: 0;
+      }
+      .project-stats {
+        font-size: 10px;
+        color: #829374;
+        display: flex;
+        gap: 17px;
+        align-items: center;
+        flex-wrap: wrap;
+        margin-top: 12px;
+      }
+      .project-stats strong {
+        font-weight: 500;
+        color: #5c784e;
+      }
+      .project-messages:empty {
+        display: none;
+      }
+      .project-messages {
+        margin-top: 12px;
+      }
+      .project-messages .error,
+      .project-messages .notice {
+        margin-bottom: 0;
+      }
+      .idle-reason {
+        font-size: 11px;
+        color: #829374;
+        line-height: 1.8;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      .project-layout {
+        display: flex;
+        flex: 1;
+        min-height: 0;
+        position: relative;
+      }
+      .map-frame {
+        flex: 1;
+        border: 0;
+        width: 100%;
+        min-width: 0;
+        height: 100%;
+        background: var(--paper);
+      }
+      .settings {
+        width: 372px;
+        flex-shrink: 0;
+        background: var(--surface);
+        border-left: 1px solid var(--line);
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+      }
+      .settings-heading {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 20px 24px;
+        border-bottom: 1px solid var(--line);
+      }
+      .settings-heading h2 {
+        font: 20px var(--serif);
+        font-weight: 500;
+        color: var(--ink);
+      }
+      .settings-scroll {
+        padding: 21px 24px 27px;
+        overflow-y: auto;
+        min-height: 0;
+        scrollbar-width: thin;
+        scrollbar-color: #cbd8bf transparent;
+      }
+      .settings .resource-row {
+        flex-wrap: wrap;
+      }
+      .settings .resource-input {
+        flex-basis: 100%;
+      }
+      .settings .resource-row .remove-resource {
+        margin-left: auto;
+      }
+      .settings .resource-row .button {
+        padding-left: 11px;
+        padding-right: 11px;
+      }
+      .settings .split-fields {
+        gap: 12px;
+      }
+      .settings .field {
+        margin-bottom: 18px;
+      }
+      .settings .field textarea {
+        min-height: 124px;
+      }
+      .settings-section {
+        border-top: 1px solid #e4eadc;
+        padding-top: 18px;
+        margin-top: 21px;
+      }
+      .settings-section h3 {
+        font-size: 11px;
+        color: #607c50;
+        font-weight: 500;
+        margin-bottom: 8px;
+      }
+      .readonly-goal {
+        font-size: 11px;
+        line-height: 1.9;
+        color: #8b987c;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      .settings-footer {
+        position: sticky;
+        bottom: 0;
+        padding-top: 14px;
+        background: var(--surface);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .saved-status {
+        font-size: 10px;
+        color: #7c9669;
+      }
+      .toast {
+        position: fixed;
+        left: 50%;
+        bottom: 25px;
+        transform: translateX(-50%);
+        padding: 9px 17px;
+        background: var(--surface);
+        border: 1px solid #cbdcbc;
+        color: #547843;
+        font-size: 12px;
+        border-radius: 6px;
+        box-shadow: 0 5px 24px #273c2416;
+        z-index: 50;
+        max-width: 90vw;
+      }
+      .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+      }
+      .loading {
+        padding: 40px;
+        color: var(--muted);
+        text-align: center;
+        font-size: 12px;
+      }
+      @media (max-width: 1100px) {
+        .project-heading-row {
+          align-items: flex-start;
+          gap: 15px;
+        }
+        .project-actions {
+          flex-wrap: wrap;
+          justify-content: flex-end;
+          max-width: 410px;
+        }
+        .project-actions .button {
+          padding: 7px 12px;
+        }
+        .settings {
+          width: 340px;
+        }
+        .home {
+          padding-top: 42px;
+        }
+      }
+      @media (max-width: 800px) {
+        .masthead {
+          height: 75px;
+          padding: 0 20px;
+        }
+        .brand-name {
+          font-size: 21px;
+        }
+        .brand {
+          gap: 12px;
+        }
+        .mark {
+          width: 25px;
+          height: 32px;
+        }
+        .eyebrow {
+          font-size: 8px;
+        }
+        .header-meta {
+          font-size: 10px;
+        }
+        .home {
+          padding: 31px 20px;
+        }
+        .home-heading {
+          margin-bottom: 24px;
+          gap: 12px;
+        }
+        .home h1 {
+          font-size: 29px;
+        }
+        .home-sub {
+          font-size: 11px;
+          max-width: 235px;
+        }
+        .home-heading .button {
+          padding: 8px 12px;
+        }
+        .project-grid {
+          grid-template-columns: 1fr;
+        }
+        .project-card {
+          min-height: 198px;
+          padding: 22px;
+        }
+        .empty-projects {
+          padding: 28px 23px;
+          gap: 17px;
+          align-items: flex-start;
+        }
+        .empty-illustration {
+          width: 63px;
+          height: 76px;
+        }
+        .empty-projects h2 {
+          font-size: 20px;
+        }
+        .empty-projects p {
+          font-size: 11px;
+        }
+        .home-bottom {
+          flex-direction: column;
+          align-items: flex-start;
+          gap: 12px;
+        }
+        .workspace-location {
+          max-width: 100%;
+        }
+        .open-existing {
+          max-width: none;
+          padding: 17px;
+        }
+        .project-page {
+          height: calc(100dvh - 75px);
+        }
+        .project-top {
+          padding: 15px 19px;
+        }
+        .project-heading-row {
+          display: block;
+        }
+        .project-title-row h1 {
+          font-size: 23px;
+        }
+        .project-actions {
+          max-width: none;
+          justify-content: flex-start;
+          margin-top: 15px;
+          gap: 7px;
+        }
+        .project-actions .button {
+          min-height: 34px;
+          font-size: 11px;
+          padding: 6px 11px;
+        }
+        .project-stats {
+          gap: 8px 15px;
+          font-size: 9px;
+        }
+        .project-navigation {
+          margin-bottom: 10px;
+        }
+        .continuity-note {
+          font-size: 9px;
+        }
+        .settings {
+          position: absolute;
+          z-index: 4;
+          right: 8px;
+          left: 8px;
+          bottom: 8px;
+          width: auto;
+          max-height: min(570px, calc(100dvh - 155px));
+          border: 1px solid #c9d8bf;
+          border-radius: 8px;
+          box-shadow: 0 10px 60px #203e2c26;
+        }
+        .settings-heading {
+          padding: 15px 20px;
+        }
+        .settings-scroll {
+          padding: 18px 20px;
+        }
+        .dialog-heading {
+          padding: 21px 21px 16px;
+        }
+        .dialog-body {
+          padding: 21px 21px 0;
+          max-height: calc(100dvh - 243px);
+        }
+        .dialog-footer {
+          padding: 16px 21px 19px;
+          gap: 12px;
+        }
+        .dialog-footer .hint {
+          font-size: 9px;
+          max-width: 175px;
+        }
+        .create-dialog {
+          max-height: calc(100dvh - 26px);
+        }
+        .resource-row {
+          gap: 4px;
+        }
+        .resource-row .button {
+          padding: 6px;
+        }
+        .resource-input {
+          font-size: 10px;
+        }
+        .split-fields {
+          gap: 13px;
+        }
+        .field label,
+        .field-label {
+          font-size: 11px;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        * {
+          transition: none !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="app">
+      <header class="masthead">
+        <div class="brand">
+          <svg class="mark" viewBox="0 0 30 40" fill="none" aria-hidden="true">
+            <path d="M5 5v12l18 10v9M5 17l18-9v19" stroke="#57734f" />
+            <circle cx="5" cy="5" r="3" fill="#365c40" />
+            <circle cx="5" cy="17" r="3" fill="#fffefa" stroke="#57734f" />
+            <circle cx="23" cy="8" r="3" fill="#fffefa" stroke="#57734f" />
+            <circle cx="23" cy="27" r="3" fill="#365c40" />
+            <circle cx="23" cy="36" r="2" fill="#a7b995" />
+          </svg>
+          <div>
+            <div class="eyebrow">AUTO RESEARCH &nbsp; / &nbsp; v0.1</div>
+            <div class="brand-name">研究工作台</div>
+          </div>
+        </div>
+        <div class="header-meta" role="status">
+          <span class="connection-dot" id="connection-dot"></span
+          ><span id="connection-label">本机工作空间</span>
+        </div>
+      </header>
+      <section class="home" id="home">
+        <div class="home-heading">
+          <div>
+            <h1>研究课题</h1>
+            <p class="home-sub">从一个问题开始，让每一段探索都有来路，也有后续。</p>
+          </div>
+          <button class="button primary" id="new-project">
+            <span class="plus" aria-hidden="true">＋</span>新建课题
+          </button>
+        </div>
+        <div class="error" id="home-error" role="alert" hidden></div>
+        <div class="project-grid" id="project-list"></div>
+        <div class="empty-projects" id="empty-projects" hidden>
+          <svg class="empty-illustration" viewBox="0 0 110 104" fill="none" aria-hidden="true">
+            <path d="M19 51h22M52 47l27-26M52 55l27 27" stroke="#aac09e" stroke-width="1.2" />
+            <rect
+              x="2"
+              y="39"
+              width="24"
+              height="24"
+              rx="5"
+              stroke="#b2c7a7"
+              stroke-dasharray="3 3"
+            />
+            <rect x="39" y="39" width="24" height="24" rx="5" fill="#edf4e5" stroke="#9dbb8c" />
+            <rect x="78" y="8" width="24" height="24" rx="5" stroke="#c4d5bc" />
+            <rect x="78" y="72" width="24" height="24" rx="5" stroke="#c4d5bc" />
+            <path d="M47 51h8M51 47v8" stroke="#668b55" />
+          </svg>
+          <div>
+            <h2>留一张空白，给新的问题</h2>
+            <p>写下研究目标，选好可用材料，即可建立课题。创建后由你决定何时开始研究。</p>
+          </div>
+        </div>
+        <div class="home-bottom">
+          <p class="workspace-location">
+            课题默认保存于<br /><code id="workspace-location"></code>
+          </p>
+          <button class="button quiet" id="toggle-open">打开已有课题目录 ↗</button>
+        </div>
+        <form class="open-existing" id="open-form" hidden>
+          <div class="field">
+            <label for="open-path">已有课题目录</label>
+            <div class="inline-row">
+              <input id="open-path" required placeholder="选择已初始化的研究课题文件夹" /><button
+                class="button small"
+                type="button"
+                id="browse-open"
+              >
+                选择文件夹
+              </button>
+            </div>
+          </div>
+          <div class="error" id="open-error" role="alert" hidden></div>
+          <button class="button small" type="submit" id="open-submit">打开课题</button>
+        </form>
+      </section>
+      <section class="project-page" id="project-page" hidden>
+        <div class="project-top">
+          <div class="project-navigation">
+            <button class="back-button" id="back-home">← 全部课题</button
+            ><span class="continuity-note">关闭页面不会停止研究</span>
+          </div>
+          <div class="project-heading-row">
+            <div class="project-identity">
+              <div class="project-title-row">
+                <h1 id="project-name"></h1>
+                <span class="badge" id="project-state"></span>
+              </div>
+              <p class="project-goal" id="project-goal"></p>
+            </div>
+            <div class="project-actions">
+              <button class="button primary" id="action-start">开始研究</button
+              ><button class="button" id="action-pause" hidden>暂停</button
+              ><button class="button danger" id="action-stop" hidden>停止</button
+              ><button class="button quiet" id="action-reconcile" hidden>核对状态</button
+              ><button class="button" id="export-map">导出路径图</button
+              ><button class="button" id="toggle-settings">课题设置</button>
+            </div>
+          </div>
+          <div class="project-stats">
+            <span id="node-count"></span><span id="active-count"></span
+            ><span id="project-budget"></span><span id="project-held"></span>
+          </div>
+          <div class="project-messages">
+            <p class="idle-reason" id="idle-reason" hidden></p>
+            <p class="notice" id="project-notice" hidden></p>
+            <p
+              class="notice"
+              id="execution-progress"
+              style="white-space: pre-line"
+              role="status"
+              hidden
+            ></p>
+            <div class="error" id="project-error" role="alert" hidden></div>
+            <div class="error" id="state-error" role="status" hidden></div>
+          </div>
+        </div>
+        <div class="project-layout">
+          <iframe class="map-frame" id="research-map" title="本课题的研究路径图"></iframe>
+          <aside class="settings" id="settings" aria-label="课题设置" hidden>
+            <div class="settings-heading">
+              <h2>课题设置</h2>
+              <button class="icon-close" id="close-settings" aria-label="关闭课题设置">×</button>
+            </div>
+            <div class="settings-scroll">
+              <form id="settings-form">
+                <div class="split-fields">
+                  <div class="field">
+                    <label for="settings-budget">总预算 · token</label
+                    ><input id="settings-budget" type="number" min="0" step="1" required />
+                  </div>
+                  <div class="field">
+                    <label for="settings-concurrency">并行探索数</label
+                    ><input id="settings-concurrency" type="number" min="1" step="1" required />
+                  </div>
+                </div>
+                <div class="field">
+                  <span class="field-label" id="settings-materials-label">可用研究材料</span>
+                  <p class="hint">修改后应用于后续派发的探索。</p>
+                  <div
+                    class="resource-list"
+                    id="settings-resources"
+                    aria-labelledby="settings-materials-label"
+                  ></div>
+                  <button class="add-resource" type="button" id="settings-add-resource">
+                    ＋ 添加材料路径
+                  </button>
+                </div>
+                <div class="field">
+                  <label for="settings-notes">后续研究要求</label
+                  ><textarea
+                    id="settings-notes"
+                    placeholder="例如：优先检验边界条件；保留尚未证明的前提。"
+                  ></textarea>
+                  <p class="hint">保存到研究笔记，供后续探索读取。</p>
+                </div>
+                <div class="error" id="settings-error" role="alert" hidden></div>
+                <div class="settings-footer">
+                  <span class="saved-status" id="settings-status"></span
+                  ><button class="button primary small" type="submit" id="settings-save">
+                    保存设置
+                  </button>
+                </div>
+              </form>
+              <section class="settings-section">
+                <h3>原始研究目标</h3>
+                <p class="readonly-goal" id="settings-goal"></p>
+                <p class="hint" style="margin-top: 12px">课题位置</p>
+                <p class="hint" id="settings-path"></p>
+              </section>
+            </div>
+          </aside>
+        </div>
+      </section>
+    </main>
+    <dialog class="create-dialog" id="create-dialog" aria-labelledby="create-title">
+      <form id="create-form">
+        <div class="dialog-heading">
+          <div>
+            <h2 id="create-title">建立一个研究课题</h2>
+            <p>先说明问题与材料，再决定何时开始。</p>
+          </div>
+          <button class="icon-close" type="button" id="close-create" aria-label="关闭新建课题">
+            ×
+          </button>
+        </div>
+        <div class="dialog-body">
+          <div class="field">
+            <label for="create-name">课题名称<span class="required">必填</span></label
+            ><input
+              id="create-name"
+              required
+              maxlength="120"
+              placeholder="例如：耦合系统的稳定性条件"
+              autocomplete="off"
+            />
+          </div>
+          <div class="field">
+            <label for="create-goal">研究目标<span class="required">必填</span></label
+            ><textarea
+              id="create-goal"
+              required
+              rows="4"
+              placeholder="想研究什么问题？目前已知什么，还有哪些条件或疑问？"
+            ></textarea>
+          </div>
+          <div class="field">
+            <span class="field-label" id="create-materials-label"
+              >可用研究材料<span class="required">可稍后添加</span></span
+            >
+            <p class="hint">选择论文、笔记、代码或数据所在的文件与文件夹。</p>
+            <div
+              class="resource-list"
+              id="create-resources"
+              aria-labelledby="create-materials-label"
+            ></div>
+            <button class="add-resource" type="button" id="create-add-resource">
+              ＋ 添加材料路径
+            </button>
+          </div>
+          <div class="split-fields">
+            <div class="field">
+              <label for="create-budget">总预算 · token</label
+              ><input id="create-budget" type="number" min="0" step="1" required />
+              <p class="hint">用于记账和派发前的预算检查。</p>
+            </div>
+            <div class="field">
+              <label for="create-concurrency">并行探索数</label
+              ><input id="create-concurrency" type="number" min="1" step="1" required />
+              <p class="hint">同时开展的研究分支数量。</p>
+            </div>
+          </div>
+          <p class="hint" id="save-preview"></p>
+          <details class="advanced">
+            <summary>更多设置</summary>
+            <div class="field">
+              <label for="create-path">课题保存目录</label>
+              <div class="inline-row">
+                <input id="create-path" placeholder="留空使用默认位置" /><button
+                  class="button small"
+                  type="button"
+                  id="browse-create-path"
+                >
+                  选择父目录
+                </button>
+              </div>
+              <p class="hint">选择父目录后，会新建以课题名称命名的子目录。</p>
+            </div>
+            <div class="split-fields">
+              <div class="field">
+                <label for="create-estimate">每次派发的预算预占 · token</label
+                ><input id="create-estimate" type="number" min="0" step="1" required />
+              </div>
+              <div class="field">
+                <label for="create-timeout">单次执行时限 · 秒</label
+                ><input id="create-timeout" type="number" min="1" step="1" required />
+              </div>
+            </div>
+            <div class="field">
+              <label for="create-dsh-config">DSH 配置文件<span class="required">可选</span></label>
+              <div class="inline-row">
+                <input id="create-dsh-config" placeholder="留空沿用本机已有配置" /><button
+                  class="button small"
+                  type="button"
+                  id="browse-dsh-config"
+                >
+                  选择文件
+                </button>
+              </div>
+            </div>
+          </details>
+          <div class="error" id="create-error" role="alert" hidden></div>
+        </div>
+        <div class="dialog-footer">
+          <p class="hint">创建课题不会调用模型。<br />进入课题后，点击「开始研究」才会运行。</p>
+          <button class="button primary" type="submit" id="create-submit">创建课题</button>
+        </div>
+      </form>
+    </dialog>
+    <div class="toast" id="toast" role="status" hidden></div>
+    <div class="sr-only" role="status" aria-live="polite" id="announcement"></div>
+    <script type="application/json" id="ari-gui-boot">__ARI_GUI_BOOT__</script>
+    <script>
+      "use strict";
+      // WORKBENCH_LOGIC_START
+      const WorkbenchLogic = (() => {
+        function countActive(project) {
+          return Array.isArray(project.active_attempts)
+            ? project.active_attempts.length
+            : Number(project.active_attempts) || 0;
+        }
+        function status(project) {
+          const active = countActive(project);
+          if (project.pending_action)
+            return {
+              label:
+                {
+                  start: "正在开始",
+                  resume: "正在接续",
+                  pause: "正在暂停",
+                  stop: "正在停止",
+                  reconcile: "正在核对",
+                }[project.pending_action] || "操作处理中",
+              kind: "attention",
+            };
+          if (project.control === "stopped" && active)
+            return { label: "正在停止", kind: "attention" };
+          if (project.control === "paused" && active)
+            return { label: "正在收尾", kind: "attention" };
+          if (project.controller_running && project.control === "running")
+            return { label: "研究进行中", kind: "running" };
+          if (project.error) return { label: "需要关注", kind: "attention" };
+          if (active) return { label: "执行尚待核对", kind: "attention" };
+          if (project.control === "running") return { label: "等待接续", kind: "attention" };
+          if (project.control === "stopped") return { label: "已停止", kind: "" };
+          if (project.node_count === 0) return { label: "尚未开始", kind: "" };
+          return { label: "已暂停", kind: "" };
+        }
+        function activityMessage(project) {
+          const entries = Array.isArray(project.activity) ? project.activity : [];
+          const lines = entries.map((item) => {
+            const role =
+              item.role === "coordinator" ? "规划探索方向" : `执行 ${item.node_id || "研究节点"}`;
+            const model = [item.provider, item.model].filter(Boolean).join(" / ");
+            const elapsed = Number.isFinite(item.elapsed_seconds)
+              ? ` · ${Math.floor(item.elapsed_seconds / 60)}分${item.elapsed_seconds % 60}秒`
+              : "";
+            const event = item.event || {};
+            const tool =
+              { read: "读取材料", write: "保存文件", run: "执行命令", submit_result: "提交结果" }[
+                event.tool
+              ] || "调用工具";
+            const step =
+              {
+                ready: "模型已连接",
+                turn_start: "等待模型返回或调用工具",
+                tool_started: tool,
+                tool_finished: event.exit_code
+                  ? `${tool}返回错误，模型正在处理`
+                  : `${tool}完成，等待模型下一步`,
+                tool_denied_or_failed: `${tool}失败，模型正在处理`,
+                turn_end: "本轮模型调用结束",
+                completed: "结果已提交",
+                failed: "执行失败",
+              }[event.type] || "等待执行进度";
+            const state = {
+              completed: "已完成",
+              failed: "已失败",
+              interrupted: "已中断",
+              unknown: "待核实",
+            }[item.state];
+            const at = event.at ? ` · 最近记录 ${String(event.at).slice(11, 19)} UTC` : "";
+            return `${item.id} · ${role}${model ? " · " + model : ""}${elapsed}${state ? " · " + state : ""}\n最近步骤：${step}${at}`;
+          });
+          if (project.node_count === 0 && countActive(project) && project.control === "running")
+            lines.unshift("正在规划第一批探索，完成后研究图才会出现节点。");
+          else if (!entries.length && project.controller_running)
+            lines.unshift("正在启动研究执行…");
+          return lines.join("\n");
+        }
+        function resourceValues(values) {
+          return [...new Set(values.map((value) => String(value).trim()).filter(Boolean))];
+        }
+        function selectedFromHash(hash) {
+          try {
+            return hash.startsWith("#project=") ? decodeURIComponent(hash.slice(9)) : null;
+          } catch {
+            return null;
+          }
+        }
+        function exportPath(value, origin) {
+          if (typeof value !== "string" || !value.startsWith("/export?")) return null;
+          const url = new URL(value, origin);
+          return url.origin === origin && url.pathname === "/export" ? url.href : null;
+        }
+        return {
+          countActive,
+          status,
+          activityMessage,
+          resourceValues,
+          selectedFromHash,
+          exportPath,
+        };
+      })();
+      // WORKBENCH_LOGIC_END
+      const $ = (id) => document.getElementById(id),
+        plain = (value) => (value == null ? "" : String(value)),
+        array = (value) => (Array.isArray(value) ? value : []);
+      const create = (tag, className, text) => {
+        const element = document.createElement(tag);
+        if (className) element.className = className;
+        if (text != null) element.textContent = plain(text);
+        return element;
+      };
+      let boot = { token: "", workspace: "", defaults: {}, projects: [] };
+      try {
+        boot = JSON.parse($("ari-gui-boot").textContent);
+      } catch {
+        setError("home-error", "工作台配置暂时无法读取，请重新打开页面。");
+      }
+      let projects = array(boot.projects),
+        current = null,
+        selectedId = null,
+        frameProject = null,
+        actionPending = false,
+        exportPending = false,
+        settingsDirty = false,
+        settingsRevision = 0,
+        settingsProject = null,
+        settingsSaving = false,
+        createPending = false,
+        pickerCount = 0,
+        selectedParent = null,
+        generatedPath = "",
+        lastList = "",
+        toastTimer = null,
+        polling = false;
+      const defaults = {
+        budget: 100000,
+        concurrency: 2,
+        estimate: 5000,
+        timeout: 900,
+        ...boot.defaults,
+      };
+      function setError(id, message) {
+        $(id).textContent = plain(message);
+        $(id).hidden = !message;
+        if (message && ["create-error", "settings-error", "open-error"].includes(id))
+          requestAnimationFrame(() => $(id).scrollIntoView({ block: "nearest" }));
+      }
+      function announce(message) {
+        $("announcement").textContent = message;
+      }
+      function toast(message) {
+        $("toast").textContent = message;
+        $("toast").hidden = false;
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => {
+          $("toast").hidden = true;
+        }, 3500);
+        announce(message);
+      }
+      function compact(value) {
+        return typeof value === "number" && Number.isFinite(value)
+          ? new Intl.NumberFormat("zh-CN", {
+              notation: "compact",
+              maximumFractionDigits: 1,
+            }).format(value)
+          : "—";
+      }
+      function connection(ok) {
+        $("connection-dot").classList.toggle("error", !ok);
+        $("connection-label").textContent = ok ? "本机工作空间" : "连接中断 · 正在重试";
+      }
+      async function api(path, payload) {
+        const options = { credentials: "same-origin", cache: "no-store" };
+        if (payload !== undefined) {
+          options.method = "POST";
+          options.headers = { "Content-Type": "application/json", "X-ARI-Token": boot.token };
+          options.body = JSON.stringify(payload);
+        }
+        const response = await fetch(path, options);
+        let result;
+        try {
+          result = await response.json();
+        } catch {
+          throw new Error("服务返回了无法读取的响应。");
+        }
+        if (!response.ok) throw new Error(plain(result.error) || `请求失败（${response.status}）`);
+        return result;
+      }
+      function updateCache(project) {
+        if (!project || !project.id) return;
+        const index = projects.findIndex((item) => item.id === project.id);
+        if (index < 0) projects.unshift(project);
+        else projects[index] = project;
+      }
+      function renderList() {
+        const key = JSON.stringify(projects);
+        if (key === lastList) return;
+        lastList = key;
+        const list = $("project-list");
+        list.replaceChildren();
+        $("empty-projects").hidden = projects.length > 0;
+        for (const [index, project] of projects.entries()) {
+          const button = create("button", "project-card"),
+            heading = create("div", "card-heading"),
+            state = WorkbenchLogic.status(project);
+          button.type = "button";
+          button.dataset.project = project.id;
+          button.setAttribute("aria-label", `打开课题：${plain(project.name || project.goal)}`);
+          heading.append(
+            create("span", "card-index", String(index + 1).padStart(2, "0")),
+            create("span", "badge " + state.kind, state.label),
+          );
+          button.append(
+            heading,
+            create("h2", "", project.name || "未命名课题"),
+            create("p", "card-goal", project.goal),
+          );
+          const footer = create("div", "card-footer");
+          footer.append(
+            create(
+              "span",
+              "",
+              `${project.node_count ?? 0} 段探索 · 已记账 ${compact(project.budget?.spent)} token`,
+            ),
+            create("span", "card-arrow", "↗"),
+          );
+          button.append(footer);
+          button.addEventListener("click", () => navigateProject(project.id));
+          list.append(button);
+        }
+      }
+      function renderProject(project) {
+        if (!project || project.id !== selectedId) return;
+        current = project;
+        updateCache(project);
+        const state = WorkbenchLogic.status(project),
+          active = WorkbenchLogic.countActive(project);
+        $("project-name").textContent = plain(project.name || "研究课题");
+        $("project-goal").textContent = plain(project.goal);
+        $("project-goal").title = plain(project.goal);
+        $("project-state").className = "badge " + state.kind;
+        $("project-state").textContent = state.label;
+        $("node-count").textContent = `${project.node_count ?? 0} 段探索`;
+        $("active-count").textContent = `${active} 项执行未结束`;
+        $("project-budget").textContent =
+          `已记账 ${compact(project.budget?.spent)} / ${compact(project.budget?.total ?? project.settings?.budget)} token`;
+        $("project-held").textContent =
+          `预算预占 ${compact(project.budget?.held)} · 未核实 ${project.budget?.unknown_count ?? "—"} 次`;
+        const activity = WorkbenchLogic.activityMessage(project);
+        $("execution-progress").textContent = activity;
+        $("execution-progress").hidden = !activity;
+        setError("state-error", project.error);
+        const reason = plain(project.idle_reason).trim();
+        const translatedReason =
+          {
+            "No next proposal": "当前没有新的探索建议；这不代表研究问题已经解决。",
+            "Coordinator call limit reached": "已达到协调者调用次数上限。",
+            "An execution needs reconciliation": "有执行状态尚未核实，需要先核对。",
+            "Stopped by user": "已按你的请求停止。",
+          }[reason] || reason;
+        $("idle-reason").textContent =
+          (project.control === "stopped" ? "停止原因：" : "暂停原因：") + translatedReason;
+        $("idle-reason").hidden =
+          !["paused", "stopped"].includes(project.control) || !reason || reason === project.error;
+        const running = !!project.controller_running,
+          pending = actionPending || !!project.pending_action,
+          start = $("action-start");
+        start.hidden = running;
+        start.textContent =
+          project.node_count === 0 &&
+          !active &&
+          project.control !== "stopped" &&
+          project.control !== "running"
+            ? "开始研究"
+            : "继续研究";
+        start.dataset.action = start.textContent === "开始研究" ? "start" : "resume";
+        start.disabled = pending;
+        $("action-pause").hidden = !(running && project.control === "running");
+        $("action-pause").disabled = pending;
+        $("action-stop").hidden = !(running || active);
+        $("action-stop").disabled = pending || project.control === "stopped";
+        $("action-reconcile").hidden = running || !active;
+        $("action-reconcile").disabled = pending;
+        $("export-map").disabled = pending || exportPending;
+        $("toggle-settings").disabled = false;
+      }
+      async function navigateProject(id) {
+        if (!id) return;
+        location.hash = "project=" + encodeURIComponent(id);
+        await showProject(id);
+      }
+      async function showProject(id) {
+        const changed = selectedId !== id;
+        selectedId = id;
+        $("home").hidden = true;
+        $("project-page").hidden = false;
+        if (changed) {
+          current = null;
+          $("project-name").textContent = "正在打开课题…";
+          $("project-goal").textContent = "";
+          $("project-state").textContent = "读取中";
+          for (const id of ["node-count", "active-count", "project-budget", "project-held"])
+            $(id).textContent = "";
+          $("action-start").disabled = true;
+          $("export-map").disabled = true;
+          $("toggle-settings").disabled = true;
+          for (const id of ["action-pause", "action-stop", "action-reconcile"]) $(id).hidden = true;
+          $("settings").hidden = true;
+          settingsDirty = false;
+          setError("project-error", "");
+          setError("state-error", "");
+          $("idle-reason").hidden = true;
+          $("project-notice").hidden = true;
+        }
+        const cached = projects.find((p) => p.id === id);
+        if (cached) renderProject(cached);
+        if (frameProject !== id) {
+          $("research-map").src = "/map?project=" + encodeURIComponent(id) + "&embedded=1";
+          frameProject = id;
+        }
+        try {
+          const project = await api("/api/project?id=" + encodeURIComponent(id));
+          if (selectedId === id) renderProject(project);
+          connection(true);
+        } catch (error) {
+          if (selectedId === id) setError("project-error", error.message);
+          connection(false);
+        }
+      }
+      function showHome() {
+        selectedId = null;
+        current = null;
+        $("home").hidden = false;
+        $("project-page").hidden = true;
+        $("settings").hidden = true;
+        renderList();
+      }
+      function preview() {
+        const custom = $("create-path").value.trim(),
+          name = $("create-name").value.trim() || "课题名称";
+        $("save-preview").textContent =
+          "保存位置：" + (custom || plain(boot.workspace).replace(/\/$/, "") + "/" + name);
+      }
+      function updateNamedPath() {
+        if (selectedParent && $("create-path").value === generatedPath) {
+          generatedPath =
+            selectedParent.replace(/\/$/, "") + "/" + ($("create-name").value.trim() || "新课题");
+          $("create-path").value = generatedPath;
+        }
+        preview();
+      }
+      function resourceRows(id) {
+        return [...$(id).querySelectorAll("input")].map((input) => input.value);
+      }
+      function resources(id) {
+        return WorkbenchLogic.resourceValues(resourceRows(id));
+      }
+      function markSettingsDirty() {
+        settingsRevision++;
+        settingsDirty = true;
+        $("settings-status").textContent = "有未保存的修改";
+      }
+      async function pick(kind, input, button, errorId, transform = (value) => value) {
+        if (pickerCount) return;
+        pickerCount++;
+        button.disabled = true;
+        setError(errorId, "");
+        try {
+          const result = await api("/api/pick", { kind });
+          if (result.path) {
+            input.value = transform(result.path);
+            input.dispatchEvent(new Event("input", { bubbles: true }));
+          }
+        } catch (error) {
+          setError(errorId, error.message);
+        } finally {
+          button.disabled = false;
+          pickerCount--;
+        }
+      }
+      function addResource(listId, value = "") {
+        const row = create("div", "resource-row"),
+          input = create("input", "resource-input"),
+          context = listId.startsWith("settings") ? "settings" : "create";
+        input.type = "text";
+        input.value = value;
+        input.placeholder = "文件或文件夹的本机路径";
+        input.setAttribute(
+          "aria-label",
+          context === "settings" ? "课题材料路径" : "新课题材料路径",
+        );
+        row.append(input);
+        for (const [kind, label] of [
+          ["file", "文件"],
+          ["folder", "文件夹"],
+        ]) {
+          const button = create("button", "button small", label);
+          button.type = "button";
+          button.setAttribute("aria-label", `为此项材料选择${label}`);
+          button.addEventListener("click", () => pick(kind, input, button, context + "-error"));
+          row.append(button);
+        }
+        const remove = create("button", "remove-resource", "×");
+        remove.type = "button";
+        remove.setAttribute("aria-label", "移除此项材料");
+        remove.addEventListener("click", () => {
+          row.remove();
+          if (context === "settings") markSettingsDirty();
+        });
+        row.append(remove);
+        $(listId).append(row);
+        return input;
+      }
+      function fillSettings(project) {
+        settingsProject = project.id;
+        $("settings-budget").value =
+          project.settings?.budget ?? project.budget?.total ?? defaults.budget;
+        $("settings-concurrency").value = project.settings?.concurrency ?? defaults.concurrency;
+        $("settings-notes").value = plain(project.notes?.text);
+        $("settings-resources").replaceChildren();
+        for (const path of array(project.settings?.resources))
+          addResource("settings-resources", path);
+        $("settings-goal").textContent = plain(project.goal);
+        $("settings-path").textContent = plain(project.path);
+        settingsDirty = false;
+        $("settings-status").textContent = "";
+        setError("settings-error", "");
+      }
+      async function action(kind) {
+        if (!current || actionPending || current.pending_action) return;
+        const id = current.id;
+        actionPending = true;
+        renderProject(current);
+        setError("project-error", "");
+        try {
+          const project = await api("/api/project/action", { id, action: kind });
+          updateCache(project);
+          if (selectedId === id) {
+            renderProject(project);
+            $("project-notice").hidden = true;
+          }
+          toast(
+            {
+              start: "已请求开始研究",
+              resume: "已请求继续研究",
+              pause: "已请求暂停新派发，正在进行的工作会收尾",
+              stop: "已请求停止执行",
+              reconcile: "已请求核对执行状态",
+            }[kind],
+          );
+        } catch (error) {
+          if (selectedId === id) setError("project-error", error.message);
+        } finally {
+          actionPending = false;
+          if (current) renderProject(current);
+        }
+      }
+      $("new-project").addEventListener("click", () => {
+        $("create-dialog").showModal();
+        preview();
+        $("create-name").focus();
+      });
+      $("close-create").addEventListener("click", () => {
+        if (!createPending) $("create-dialog").close();
+      });
+      $("create-dialog").addEventListener("cancel", (event) => {
+        if (createPending) event.preventDefault();
+      });
+      $("create-name").addEventListener("input", updateNamedPath);
+      $("create-path").addEventListener("input", () => {
+        if ($("create-path").value !== generatedPath) selectedParent = null;
+        preview();
+      });
+      $("create-add-resource").addEventListener("click", () =>
+        addResource("create-resources").focus(),
+      );
+      $("settings-add-resource").addEventListener("click", () => {
+        addResource("settings-resources").focus();
+        markSettingsDirty();
+      });
+      $("settings-form").addEventListener("input", markSettingsDirty);
+      $("toggle-open").addEventListener("click", () => {
+        $("open-form").hidden = !$("open-form").hidden;
+        if (!$("open-form").hidden) $("open-path").focus();
+      });
+      $("browse-open").addEventListener("click", (event) =>
+        pick("folder", $("open-path"), event.currentTarget, "open-error"),
+      );
+      $("browse-create-path").addEventListener("click", (event) =>
+        pick("folder", $("create-path"), event.currentTarget, "create-error", (parent) => {
+          selectedParent = parent;
+          generatedPath =
+            parent.replace(/\/$/, "") + "/" + ($("create-name").value.trim() || "新课题");
+          return generatedPath;
+        }),
+      );
+      $("browse-dsh-config").addEventListener("click", (event) =>
+        pick("file", $("create-dsh-config"), event.currentTarget, "create-error"),
+      );
+      $("create-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        if (createPending) return;
+        createPending = true;
+        $("create-submit").disabled = true;
+        $("create-submit").textContent = "正在创建…";
+        $("close-create").disabled = true;
+        setError("create-error", "");
+        const payload = {
+          name: $("create-name").value.trim(),
+          goal: $("create-goal").value.trim(),
+          resources: resources("create-resources"),
+          budget: Number($("create-budget").value),
+          concurrency: Number($("create-concurrency").value),
+          estimate: Number($("create-estimate").value),
+          timeout: Number($("create-timeout").value),
+        };
+        if ($("create-path").value.trim()) payload.path = $("create-path").value.trim();
+        if ($("create-dsh-config").value.trim())
+          payload.dsh_config = $("create-dsh-config").value.trim();
+        try {
+          const project = await api("/api/projects/create", payload);
+          updateCache(project);
+          $("create-dialog").close();
+          await navigateProject(project.id);
+          $("project-notice").textContent = "课题已创建。准备好后，点击「开始研究」。";
+          $("project-notice").hidden = false;
+          $("create-form").reset();
+          setCreateDefaults();
+          announce("课题已创建，尚未调用模型。");
+        } catch (error) {
+          setError("create-error", error.message);
+        } finally {
+          createPending = false;
+          $("create-submit").disabled = false;
+          $("create-submit").textContent = "创建课题";
+          $("close-create").disabled = false;
+        }
+      });
+      $("open-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const button = $("open-submit");
+        if (button.disabled) return;
+        button.disabled = true;
+        setError("open-error", "");
+        try {
+          const project = await api("/api/projects/open", { path: $("open-path").value.trim() });
+          updateCache(project);
+          await navigateProject(project.id);
+        } catch (error) {
+          setError("open-error", error.message);
+        } finally {
+          button.disabled = false;
+        }
+      });
+      $("settings-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        if (!current || settingsSaving) return;
+        const id = current.id,
+          submittedRevision = settingsRevision;
+        settingsSaving = true;
+        $("settings-save").disabled = true;
+        setError("settings-error", "");
+        const payload = {
+          id,
+          budget: Number($("settings-budget").value),
+          concurrency: Number($("settings-concurrency").value),
+          resources: resources("settings-resources"),
+          notes: $("settings-notes").value,
+        };
+        try {
+          const project = await api("/api/project/update", payload);
+          updateCache(project);
+          if (selectedId === id) {
+            renderProject(project);
+            if (settingsRevision === submittedRevision) {
+              fillSettings(project);
+              $("settings-status").textContent = "已保存";
+            } else $("settings-status").textContent = "已保存；仍有新修改";
+          }
+          toast("课题设置已保存");
+        } catch (error) {
+          if (selectedId === id) setError("settings-error", error.message);
+        } finally {
+          settingsSaving = false;
+          $("settings-save").disabled = false;
+        }
+      });
+      $("back-home").addEventListener("click", () => {
+        location.hash = "";
+        showHome();
+      });
+      $("toggle-settings").addEventListener("click", () => {
+        if (!current) return;
+        if ($("settings").hidden) {
+          if (settingsProject !== current.id || !settingsDirty) fillSettings(current);
+          $("settings").hidden = false;
+        } else $("settings").hidden = true;
+      });
+      $("close-settings").addEventListener("click", () => {
+        $("settings").hidden = true;
+      });
+      $("action-start").addEventListener("click", () => action($("action-start").dataset.action));
+      $("action-pause").addEventListener("click", () => action("pause"));
+      $("action-stop").addEventListener("click", () => action("stop"));
+      $("action-reconcile").addEventListener("click", () => action("reconcile"));
+      $("export-map").addEventListener("click", async () => {
+        const button = $("export-map");
+        if (!current || button.disabled || exportPending) return;
+        const id = current.id;
+        exportPending = true;
+        button.disabled = true;
+        setError("project-error", "");
+        try {
+          const result = await api("/api/project/export", { id }),
+            url = WorkbenchLogic.exportPath(result.url, location.origin);
+          if (!url) throw new Error("导出地址无效。");
+          const link = create("a");
+          link.href = url;
+          link.download = plain(result.filename || "research-map.html");
+          document.body.append(link);
+          link.click();
+          link.remove();
+        } catch (error) {
+          if (selectedId === id) setError("project-error", error.message);
+        } finally {
+          exportPending = false;
+          if (current) renderProject(current);
+        }
+      });
+      window.addEventListener("hashchange", () => {
+        const id = WorkbenchLogic.selectedFromHash(location.hash);
+        if (id && id !== selectedId) showProject(id);
+        else if (!id) showHome();
+      });
+      function setCreateDefaults() {
+        selectedParent = null;
+        generatedPath = "";
+        for (const key of ["budget", "concurrency", "estimate", "timeout"])
+          $("create-" + key).value = defaults[key];
+        $("create-resources").replaceChildren();
+        addResource("create-resources");
+        preview();
+      }
+      async function poll() {
+        if (polling) return;
+        polling = true;
+        const id = selectedId;
+        try {
+          const responses = await Promise.all([
+            api("/api/projects"),
+            id ? api("/api/project?id=" + encodeURIComponent(id)) : Promise.resolve(null),
+          ]);
+          projects = array(responses[0].projects);
+          if (responses[0].workspace) {
+            boot.workspace = responses[0].workspace;
+            $("workspace-location").textContent = boot.workspace;
+          }
+          if (id && selectedId === id && responses[1]) renderProject(responses[1]);
+          if (!selectedId) renderList();
+          connection(true);
+        } catch (error) {
+          connection(false);
+        } finally {
+          polling = false;
+          setTimeout(poll, 2000);
+        }
+      }
+      $("workspace-location").textContent = plain(boot.workspace);
+      setCreateDefaults();
+      renderList();
+      const initialId = WorkbenchLogic.selectedFromHash(location.hash);
+      if (initialId) showProject(initialId);
+      setTimeout(poll, 2000);
+    </script>
+  </body>
+</html>

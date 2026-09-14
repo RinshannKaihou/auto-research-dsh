@@ -1,0 +1,1 @@
+{"t": "2026-09-12T18:47:07+08:00", "ev": "validate", "ref": "R-025", "artifact_sha": "f087bd175436", "val_tpr": 0.443902, "val_fpr": 0.008708, "n_detected": 273, "n_should": 615, "n_false_positive": 37, "n_should_not": 4249, "n_skipped": 0, "n_detector_errors": 0, "n_records": 4864, "gt_sha12": "ffee0a5c3ddc", "gt_pinned": true}
