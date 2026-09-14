@@ -366,7 +366,6 @@ def migrate_copy(source: str | Path, destination: str | Path) -> dict:
         store = NativeStore(temporary)
         project = store.initialize(
             report["project"]["goal"],
-            float(report["project"]["budget_limit"]),
             "migration:initialize",
         )
         imported_at = now()

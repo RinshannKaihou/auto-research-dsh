@@ -421,7 +421,7 @@ class NativeService:
                 "model_loop": "native-goals",
                 "manual_research": True,
                 "autonomous_research": True,
-                "budget_enforcement": "autonomous-soft-limit",
+                "usage_accounting": "observation-only",
                 "strict_cross_session_read_isolation": False,
             }
         elif method == "project_sessions":
@@ -439,9 +439,9 @@ class NativeService:
             except Exception as exc:
                 if "not initialized" not in str(exc).lower():
                     raise
-                state = {"project": store.initialize(
-                    request.get("goal"), request.get("budget", 0), self._operation(request)
-                )}
+                state = {
+                    "project": store.initialize(request.get("goal"), self._operation(request))
+                }
             project_id = state["project"]["project_id"]
             self.registry.register(project_id, root, host_id, session_id)
             store.associate(host_id, session_id, self._operation(request) + ":associate")
@@ -496,8 +496,6 @@ class NativeService:
                 value = store.close_node(request.get("node_id"), self._operation(request))
             elif method == "control":
                 value = store.set_control(request.get("control"), self._operation(request))
-            elif method == "budget":
-                value = store.set_budget(request.get("budget"), self._operation(request))
             elif method == "host_event":
                 value = store.record_host_event(
                     host_id, session_id, request.get("event_type"), request.get("sequence"),

@@ -24,20 +24,10 @@ export class ResearchDomain {
     return this.storage.request(method, this.identity(agent), fields, id ?? operationId(agent));
   }
 
-  async open(agent, { goal, budget = 0, root } = {}, id) {
+  async open(agent, { goal, root } = {}, id) {
     const projectRoot = root ?? agent.session.header.cwd;
     if (!projectRoot) throw new Error('The native session has no working directory');
-    return this.request(agent, 'open', { root: projectRoot, goal, budget }, id);
-  }
-
-  async autonomousStatus(agent) {
-    const state = await this.request(agent, 'query');
-    if (state.usage.unknown_count > 0) {
-      throw new Error('Unknown model usage must be reconciled before autonomous research');
-    }
-    if (!(state.usage.budget > 0)) throw new Error('Set a positive project budget before /research auto');
-    if (state.usage.remaining <= 0) throw new Error('Project budget is exhausted; manual research remains available');
-    return state;
+    return this.request(agent, 'open', { root: projectRoot, goal }, id);
   }
 
   async focus(agent, nodeId, id) {
@@ -72,12 +62,8 @@ export class ResearchDomain {
     return this.request(agent, 'detach', {}, `${id}:detach`);
   }
 
-  async auto(agent, id, budget) {
-    if (budget !== undefined) {
-      if (!Number.isFinite(budget) || budget <= 0) throw new Error('Autonomous budget must be positive');
-      await this.request(agent, 'budget', { budget }, `${id}:budget`);
-    }
-    let state = await this.autonomousStatus(agent);
+  async auto(agent, id) {
+    let state = await this.request(agent, 'query');
     if (state.attempt?.mode === 'manual') {
       const prior = state.attempt;
       await this.request(agent, 'finish', {
@@ -88,7 +74,7 @@ export class ResearchDomain {
         role: prior.role,
         mode: 'auto',
       }, `${id}:focus-auto`);
-      state = await this.autonomousStatus(agent);
+      state = await this.request(agent, 'query');
     }
     const current = this.ctx.goals.get(agent);
     const owned = state.owned_goal;
@@ -115,7 +101,7 @@ export class ResearchDomain {
   }
 
   async changeGoal(agent, action, id, { projectControl = true } = {}) {
-    const state = action === 'resume' ? await this.autonomousStatus(agent) : await this.request(agent, 'query');
+    const state = await this.request(agent, 'query');
     const current = this.ctx.goals.get(agent);
     if (!current || !state.owned_goal || current.id !== state.owned_goal.goal_id) {
       throw new Error('No plugin-owned native goal is active in this session');
@@ -142,7 +128,6 @@ export class ResearchDomain {
   }
 
   async projectGoals(agent, action, id) {
-    if (action === 'resume') await this.autonomousStatus(agent);
     const sessions = await this.storage.request('project_sessions', this.identity(agent));
     const results = [];
     for (const row of sessions) {

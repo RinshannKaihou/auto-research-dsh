@@ -1,8 +1,3 @@
-function parseInit(input) {
-  const match = input.trim().match(/^(.*?)(?:\s+--budget\s+(\d+(?:\.\d+)?))?$/);
-  return { goal: match?.[1]?.trim(), budget: match?.[2] === undefined ? 0 : Number(match[2]) };
-}
-
 function result(value) {
   return { kind: 'success', text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) };
 }
@@ -19,9 +14,11 @@ export function registerResearchCommand(ctx, domain) {
       const id = `${invocation.agent.id}:${invocation.commandId}`;
       try {
         if (action === 'init') {
-          const options = parseInit(arg);
-          if (!options.goal) throw new Error('Usage: /research init <goal> [--budget <amount>]');
-          return result(await domain.open(invocation.agent, options, id));
+          if (!arg) throw new Error('Usage: /research init <goal>');
+          if (/\s--budget(?:\s|$)/.test(` ${arg}`)) {
+            throw new Error('Research budgets were removed; run /research init without --budget');
+          }
+          return result(await domain.open(invocation.agent, { goal: arg }, id));
         }
         if (action === 'open') return result(await domain.open(invocation.agent, {}, id));
         if (action === 'status') return result(await domain.request(invocation.agent, 'query', {}, id));
@@ -30,8 +27,8 @@ export function registerResearchCommand(ctx, domain) {
           return result(await domain.focus(invocation.agent, nodeId, id));
         }
         if (action === 'auto') {
-          const requestedBudget = arg ? Number(arg) : undefined;
-          return result(await domain.auto(invocation.agent, id, requestedBudget));
+          if (arg) throw new Error('Usage: /research auto');
+          return result(await domain.auto(invocation.agent, id));
         }
         if (action === 'pause') return result(await domain.projectGoals(invocation.agent, 'pause', id));
         if (action === 'resume') return result(await domain.projectGoals(invocation.agent, 'resume', id));

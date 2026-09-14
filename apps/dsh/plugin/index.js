@@ -61,12 +61,11 @@ export function apply(ctx, config = {}) {
         if (endpoint === 'open') {
           return { ok: true, value: await domain.open(agent, {
             goal: payload.goal,
-            budget: payload.budget ?? 0,
           }, id) };
         }
         if (endpoint === 'auto') return {
           ok: true,
-          value: await domain.auto(agent, id, payload.budget),
+          value: await domain.auto(agent, id),
         };
         if (endpoint === 'pause' || endpoint === 'resume') {
           return { ok: true, value: await domain.projectGoals(agent, endpoint, id) };

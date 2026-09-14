@@ -287,6 +287,9 @@ class NativeStore:
             raise NotFoundError("Project is not initialized")
         value = dict(row)
         value["config"] = json.loads(value["config"])
+        # Kept physically for schema-2 database compatibility. Quotas are no
+        # longer part of the native plugin API or any runtime decision.
+        value.pop("budget_limit", None)
         return value
 
     @staticmethod
@@ -309,8 +312,8 @@ class NativeStore:
             raise NotFoundError("No active research work segment")
         return row
 
-    def initialize(self, goal: str, budget: float, request_id: str) -> dict:
-        payload = {"goal": _text(goal, "goal"), "budget": _number(budget, "budget")}
+    def initialize(self, goal: str, request_id: str) -> dict:
+        payload = {"goal": _text(goal, "goal")}
 
         def work(db: sqlite3.Connection) -> dict:
             if db.execute("SELECT 1 FROM project").fetchone():
@@ -325,7 +328,7 @@ class NativeStore:
             db.execute(
                 "INSERT INTO project VALUES (?,?,?,?,?,?)",
                 (
-                    value["project_id"], value["goal"], value["budget"],
+                    value["project_id"], value["goal"], 0,
                     value["control"], _json(value["config"]), value["created_at"],
                 ),
             )
@@ -888,21 +891,6 @@ class NativeStore:
 
         return self._mutate("set_control", payload, request_id, work)
 
-    def set_budget(self, budget: float, request_id: str) -> dict:
-        payload = {"budget": _number(budget, "budget")}
-
-        def work(db: sqlite3.Connection) -> dict:
-            project = self._project(db)
-            db.execute(
-                "UPDATE project SET budget_limit=? WHERE project_id=?",
-                (payload["budget"], project["project_id"]),
-            )
-            value = {"project_id": project["project_id"], "budget": payload["budget"]}
-            self._event(db, "project.budget", value)
-            return value
-
-        return self._mutate("set_budget", payload, request_id, work)
-
     def record_restore(
         self,
         host_id: str,
@@ -1090,8 +1078,6 @@ class NativeStore:
                 "owned_goal": dict(owned_goal) if owned_goal else None,
                 "usage": {
                     "known": float(usage["known"]), "unknown_count": int(usage["unknown"] or 0),
-                    "budget": float(project["budget_limit"]),
-                    "remaining": float(project["budget_limit"]) - float(usage["known"]),
                 },
                 "usage_observations": usage_observations,
             }

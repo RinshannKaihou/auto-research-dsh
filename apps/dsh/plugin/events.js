@@ -129,11 +129,6 @@ export function registerResearchEvents(ctx, domain) {
             completeness: usage ? 'actual' : 'unknown',
             details: { usage: usage ?? {}, finish_reason: finishReason },
           }, `${sourceKey}:finish`);
-          const state = await domain.storage.request('query', identity);
-          if (agent && state.project.control === 'auto' &&
-              (state.usage.unknown_count > 0 || state.usage.remaining <= 0)) {
-            await domain.projectGoals(agent, 'pause', `${sourceKey}:budget`);
-          }
         } catch {
           if (!agent) return;
           const goal = ctx.goals.get(agent);

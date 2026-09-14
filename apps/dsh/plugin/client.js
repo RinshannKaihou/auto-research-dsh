@@ -18,7 +18,6 @@ window.__ModuleLoader__.load({
       const [error, setError] = React.useState(null);
       const [notice, setNotice] = React.useState(null);
       const [goal, setGoal] = React.useState('');
-      const [budget, setBudget] = React.useState('');
       const [branchNode, setBranchNode] = React.useState('');
 
       const call = React.useCallback(async (endpoint, payload = {}) => {
@@ -77,14 +76,12 @@ window.__ModuleLoader__.load({
       !state ? h('section', { style: box },
         h('h3', null, '关联当前会话'),
         h('input', { value: goal, onChange: event => setGoal(event.target.value), placeholder: '研究目标' }),
-        h('input', { value: budget, onChange: event => setBudget(event.target.value), placeholder: '自主预算（可稍后设置）', type: 'number' }),
-        button('新建并关联', () => act('open', { goal, budget: Number(budget || 0) }), !goal.trim()),
+        button('新建并关联', () => act('open', { goal }), !goal.trim()),
         button('关联已有项目', () => act('open', {}))) : h(React.Fragment, null,
         h('section', { style: box }, h('h3', null, state.project.goal),
           h('p', null, `控制：${state.project.control} · 当前工作段：${state.attempt?.attempt_id ?? '无'}`),
-          h('p', null, `用量 ${state.usage.known} / ${state.usage.budget}；未知请求 ${state.usage.unknown_count}`),
-          h('input', { value: budget, onChange: event => setBudget(event.target.value), placeholder: '更新自主预算', type: 'number' }),
-          button('开启自主研究', () => act('auto', budget ? { budget: Number(budget) } : {})),
+          h('p', null, `已记录用量 ${state.usage.known} token；缺失请求 ${state.usage.unknown_count}`),
+          button('开启自主研究', () => act('auto')),
           button('暂停', () => act('pause')),
           button('继续', () => act('resume')),
           button('停止项目', () => act('stop')),

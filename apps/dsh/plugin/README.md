@@ -16,7 +16,7 @@ Build and install from this directory:
 
 ```bash
 npm pack
-dsh plugin --profile <profile-name> add ./auto-research-v5-0.3.0.tgz
+dsh plugin --profile <profile-name> add ./auto-research-v5-0.3.1.tgz
 ```
 
 Replace `<profile-name>` with the profile to modify, for example `web`, and
@@ -44,18 +44,18 @@ plugin defaults to its bundled `python/` directory. The default registry is
 
 ## Native use
 
-Run `/research init <goal> [--budget <amount>]` in a normal DSH session. The
+Run `/research init <goal>` in a normal DSH session. The
 project root is the session's current `cwd`; browser and model payloads cannot
 choose another root. Continue chatting normally and use DSH tools normally.
 
 Commands:
 
 ```text
-/research init <goal> [--budget <amount>]
+/research init <goal>
 /research open
 /research status
 /research focus [planning|<node-id>]
-/research auto [budget]
+/research auto
 /research pause
 /research resume
 /research stop
@@ -83,7 +83,8 @@ write destinations; they are not a claim of strict cross-session read isolation.
 Publication and snapshot source paths reject `.research`, `.git`, `.env`, and
 credential-like names. Immutable object bytes are fixed before the schema-2
 transaction. Lost responses and IPC retries reuse their operation intent.
-Unknown usage pauses autonomous continuation but does not block manual chat.
+Usage is observation-only: recorded tokens and missing observations are shown,
+but neither creates a hard or soft limit or pauses autonomous continuation.
 
 Run the no-network deterministic profile with:
 
