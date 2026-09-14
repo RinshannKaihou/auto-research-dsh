@@ -1,0 +1,12 @@
+{
+  "name": "auto-research-v5",
+  "version": "0.3.0",
+  "description": "Native DSH research workflow plugin",
+  "type": "module",
+  "main": "index.js",
+  "exports": { ".": "./index.js", "./client": "./client.js", "./package.json": "./package.json" },
+  "files": ["*.js", "cordis.patch.yml", "README.md", "python/**/*.py", "LICENSES/*"],
+  "scripts": { "prepack": "node scripts/sync-python.mjs" },
+  "dsh": { "bundle": { "patch": "cordis.patch.yml" }, "client": { "platform": "web" } },
+  "peerDependencies": { "@deepseek-ai/cordis": "^4.0.2" }
+}

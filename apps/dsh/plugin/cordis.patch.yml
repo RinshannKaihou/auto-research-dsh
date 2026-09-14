@@ -1,0 +1,4 @@
+- insert:
+    - id: auto-research-v5
+      name: auto-research-v5
+      config: {}
