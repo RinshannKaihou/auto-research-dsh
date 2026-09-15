@@ -191,7 +191,7 @@ class ProjectRegistry:
 
 
 class NativeService:
-    """Private schema-3 research service. It never invokes a model or schedules work."""
+    """Private schema-4 research service. It never invokes a model or schedules work."""
 
     def __init__(self, registry: str | Path):
         self.registry = ProjectRegistry(registry)
@@ -320,31 +320,29 @@ class NativeService:
         intent_path, saved = self._intent(root, operation_id, "branch")
         if saved is not None:
             return saved
-        state = store.query()
-        node = next((item for item in state["nodes"] if item["node_id"] == node_id), None)
+        try:
+            selected_node = store.reference_query(node_id, full=True)
+        except Exception:
+            selected_node = None
+        node = selected_node["value"] if selected_node and selected_node["kind"] == "node" else None
         if node is None or node["status"] == "closed":
             raise ValueError(f"Unknown or closed research node: {node_id}")
         refs = list(node["inputs"])
         if node.get("anchor_ref") and node["anchor_ref"] not in refs:
             refs.append(node["anchor_ref"])
-        publications = {
-            item["ref"]: (publication, item)
-            for publication in state["publications"]
-            for item in publication["items"]
-        }
-        legacy = {item["ref"]: item for item in state["legacy_refs"]}
         materialized = []
         index = []
         for ref in refs:
             product = None
             entry = {"ref": ref, "materialized": False}
-            if ref in publications:
-                publication, item = publications[ref]
+            selected = store.reference_query(ref, full=True)
+            if selected["kind"] == "publication-item":
+                item = selected["value"]
                 entry.update(
                     {
                         "kind": item["kind"],
                         "content": item["content"],
-                        "publication_id": publication["publication_id"],
+                        "publication_id": item["publication_id"],
                     }
                 )
                 if item.get("object_version"):
@@ -357,13 +355,13 @@ class NativeService:
                         "version": item["object_version"],
                         "kind": object_kind,
                     }
-            elif ref in legacy:
-                old = legacy[ref]
+            elif selected["kind"] == "legacy-ref":
+                old = selected["value"]
                 entry.update({"kind": old["kind"], "legacy": True})
                 if old["kind"] == "product" and isinstance(old["item"], dict):
                     product = {key: old["item"].get(key) for key in ("path", "version", "kind")}
-            elif any(item["node_id"] == ref for item in state["nodes"]):
-                entry.update({"kind": "node"})
+            elif selected["kind"] in {"node", "knowledge"}:
+                entry.update({"kind": selected["kind"]})
             else:
                 raise ValueError(f"Unknown research reference: {ref}")
             if product and all(product.values()):
@@ -404,11 +402,11 @@ class NativeService:
         return value
 
     def restore_preview(self, store, root, snapshot_id, session_id):
-        state = store.query()
-        snapshot = next((s for s in state["snapshots"] if s["snapshot_id"] == snapshot_id), None)
-        if not snapshot:
+        selected = store.reference_query(snapshot_id, full=True)
+        if selected["kind"] != "snapshot":
             raise ValueError("Unknown snapshot")
-        attempt = next(a for a in state["attempts"] if a["attempt_id"] == snapshot["attempt_id"])
+        snapshot = selected["value"]
+        attempt = store.reference_query(snapshot["attempt_id"], full=True)["value"]
         manifest = snapshot["manifest"]
         with store._connection() as db:
             saved = db.execute(
@@ -418,7 +416,7 @@ class NativeService:
             json.loads(saved["context"])
             if saved
             else {
-                "goal": state["project"]["goal"],
+                "goal": store.control_state()["project"]["goal"],
                 "source_attempt_id": attempt["attempt_id"],
                 "source_node_id": attempt["node_id"],
                 "files": manifest,
@@ -441,21 +439,20 @@ class NativeService:
         }
 
     def prepare_discussion(self, store, root, host_id, session_id, request):
-        state = store.query(host_id, session_id)
-        node = next((n for n in state["nodes"] if n["node_id"] == request["node_id"]), None)
-        if not node:
+        selected = store.reference_query(request["node_id"], full=True)
+        node = selected["value"] if selected["kind"] == "node" else None
+        if node is None:
             raise ValueError("Unknown discussion node")
         if not request.get("fresh"):
-            existing = next(
-                (
-                    s
-                    for s in reversed(state["workflow"]["sessions"])
-                    if s["role"] == "discussion"
-                    and not s["detached"]
-                    and s["node_id"] == node["node_id"]
-                ),
-                None,
-            )
+            with store._connection() as db:
+                row = db.execute(
+                    "SELECT * FROM workflow_sessions WHERE role='discussion' AND detached=0 "
+                    "AND node_id=? ORDER BY rowid DESC LIMIT 1",
+                    (node["node_id"],),
+                ).fetchone()
+                existing = dict(row) if row else None
+                if existing:
+                    existing["context"] = json.loads(existing["context"])
             if existing:
                 return {
                     "session_id": existing["session_id"],
@@ -469,21 +466,40 @@ class NativeService:
         digest = hashlib.sha256(self._operation(request).encode()).hexdigest()[:20]
         workspace = root / "workspaces" / ("discussion-" + digest)
         workspace.mkdir(parents=True, exist_ok=True)
-        attempt_ids = {
-            a["attempt_id"] for a in state["attempts"] if a["node_id"] == node["node_id"]
-        }
         refs = set(node.get("inputs", []))
-        publications = [
-            p
-            for p in state["publications"]
-            if p["node_id"] == node["node_id"] or any(i["ref"] in refs for i in p["items"])
-        ]
+        referenced_publications = {
+            ref[4:].split("#", 1)[0] for ref in refs if ref.startswith("pub/")
+        }
+        with store._connection() as db:
+            attempt_ids = {
+                row["attempt_id"]
+                for row in db.execute("SELECT attempt_id FROM attempts WHERE node_id=?", (node["node_id"],))
+            }
+            publication_rows = list(
+                db.execute(
+                    "SELECT rowid AS _cursor,* FROM publications WHERE node_id=? "
+                    "OR publication_id IN (SELECT value FROM json_each(?)) ORDER BY rowid",
+                    (node["node_id"], json.dumps(sorted(referenced_publications))),
+                )
+            )
+            publications = [
+                store._decode_page_row(db, "publications", row, full=True)
+                for row in publication_rows
+            ]
+            notes = [
+                dict(row)
+                for row in db.execute(
+                    "SELECT * FROM notes WHERE attempt_id IN (SELECT value FROM json_each(?)) ORDER BY rowid",
+                    (json.dumps(sorted(attempt_ids)),),
+                )
+            ]
+            goal = store._project(db)["goal"]
         context = {
             "role": "discussion",
-            "goal": state["project"]["goal"],
+            "goal": goal,
             "node": node,
             "publications": publications,
-            "notes": [n for n in state["notes"] if n["attempt_id"] in attempt_ids],
+            "notes": notes,
             "instruction": "Discuss these frozen references. Query for newer records explicitly. Do not mutate the research ledger or dispatch research.",
         }
         index = []
@@ -537,17 +553,52 @@ class NativeService:
         method = request.get("method")
         if method == "capabilities":
             value = {
-                "schema_version": 3,
+                "schema_version": 4,
                 "execution_owner": "dsh",
                 "model_loop": "native-goals",
                 "manual_research": True,
                 "autonomous_research": True,
                 "usage_accounting": "observation-only",
                 "strict_cross_session_read_isolation": False,
+                "knowledge_revisions": True,
+                "native_specialists": "foreground-one-shot",
             }
         elif method == "project_sessions":
             host_id, session_id = self._identity(request)
             value = self.registry.sessions_for(host_id, session_id)
+        elif method == "specialist_bind_child":
+            host_id, parent_session_id = self._identity(request)
+            root = self.registry.root_for(host_id, parent_session_id)
+            store = self.stores.get(str(root))
+            if store is None:
+                store = self.stores[str(root)] = NativeStore(root)
+            child_session_id = request.get("child_session_id")
+            if not isinstance(child_session_id, str) or not child_session_id:
+                raise ValueError("child_session_id is required")
+            operation_id = self._operation(request)
+            project_id = store.control_state()["project"]["project_id"]
+            self.registry.register(project_id, root, host_id, child_session_id)
+            store.associate(host_id, child_session_id, operation_id + ":associate")
+            store.workflow(
+                host_id,
+                child_session_id,
+                "register",
+                {
+                    "role": "specialist",
+                    "cwd": request.get("cwd", str(root)),
+                    "node_id": request.get("node_id"),
+                    "context": {"specialist_task_id": request.get("task_id")},
+                },
+                operation_id + ":role",
+            )
+            value = store.specialist_bind(
+                {
+                    "task_id": request.get("task_id"),
+                    "session_id": child_session_id,
+                    "parent_session_id": parent_session_id,
+                },
+                operation_id,
+            )
         elif method == "open":
             host_id, session_id = self._identity(request)
             root_value = request.get("root")
@@ -558,7 +609,7 @@ class NativeService:
             if store is None:
                 store = self.stores[str(root)] = NativeStore(root)
             try:
-                state = store.query()
+                state = store.control_state()
             except Exception as exc:
                 if "not initialized" not in str(exc).lower():
                     raise
@@ -578,7 +629,8 @@ class NativeService:
                 },
                 self._operation(request) + ":role",
             )
-            value = store.query(host_id, session_id)
+            value = store.control_state(host_id, session_id)
+            value["project_root"] = str(root)
         else:
             store, root, host_id, session_id = self._store(request)
             with store._connection() as db:
@@ -595,9 +647,13 @@ class NativeService:
                 "snapshot",
                 "finish",
                 "close_node",
+                "memory_write",
+                "specialist_create",
             }
-            if role and role["role"] == "discussion" and method in writes:
-                raise ValueError("Discussion sessions cannot modify the research ledger")
+            if role and role["role"] in {"discussion", "handoff", "specialist"} and method in writes:
+                raise ValueError(f"{role['role'].title()} sessions cannot modify the research ledger")
+            if method == "guidance_register" and (not role or role["role"] != "main"):
+                raise ValueError("Only the research main session may configure method guidance")
             if request.get("model_call") and method not in writes | {"query", "status"}:
                 raise ValueError("This operation requires the host controller")
             if request.get("model_call") and method in {"note", "publish", "snapshot"}:
@@ -691,11 +747,153 @@ class NativeService:
                         "INSERT INTO projection_cursors VALUES(?,?) ON CONFLICT(session_id) DO UPDATE SET sequence=MAX(sequence,excluded.sequence)",
                         (session_id, request.get("cursor", 0)),
                     )
-            elif method in {"query", "status"}:
-                value = store.query(host_id, session_id, request.get("ref"))
+            elif method == "status" or method == "control_state":
+                value = store.control_state(host_id, session_id)
                 value["project_root"] = str(root)
-            elif method == "memory":
-                value = store.memory_view(host_id, session_id, int(request.get("max_chars", 12000)))
+            elif method == "query":
+                if request.get("ref") and request.get("offset") is not None:
+                    value = store.reference_chunk(
+                        request["ref"], offset=request.get("offset", 0), limit=request.get("limit", 8192)
+                    )
+                elif request.get("ref"):
+                    value = store.reference_query(request["ref"])
+                elif any(request.get(key) is not None for key in ("query", "kind", "node_id", "status", "revision", "conditions")):
+                    value = store.knowledge_query(
+                        query=request.get("query"),
+                        node_id=request.get("node_id"),
+                        kind=request.get("kind"),
+                        status=request.get("status"),
+                        revision=request.get("revision"),
+                        conditions=request.get("conditions"),
+                        after=request.get("after", 0),
+                        limit=request.get("limit", 50),
+                    )
+                elif request.get("collection"):
+                    if request["collection"] == "usage":
+                        value = store.usage_page(
+                            after=request.get("after", 0),
+                            upper_id=request.get("upper_id"),
+                            limit=request.get("limit", 50),
+                        )
+                    elif request["collection"] == "changes":
+                        value = store.changes_page(
+                            after=request.get("after", 0), limit=request.get("limit", 50)
+                        )
+                    else:
+                        value = store.history_page(
+                            request["collection"],
+                            after=request.get("after", 0),
+                            upper_id=request.get("upper_id"),
+                            limit=request.get("limit", 50),
+                        )
+                else:
+                    value = store.control_state(host_id, session_id)
+                    value["project_root"] = str(root)
+            elif method == "history_page":
+                value = store.history_page(
+                    request.get("collection"),
+                    after=request.get("after", 0),
+                    upper_id=request.get("upper_id"),
+                    limit=request.get("limit", 50),
+                )
+            elif method == "usage_page":
+                value = store.usage_page(
+                    after=request.get("after", 0),
+                    upper_id=request.get("upper_id"),
+                    limit=request.get("limit", 50),
+                )
+            elif method == "changes_page":
+                value = store.changes_page(
+                    after=request.get("after", 0), limit=request.get("limit", 50)
+                )
+            elif method in {"memory", "memory_context"}:
+                value = store.context_view(
+                    host_id, session_id, int(request.get("max_chars", 12000))
+                )
+            elif method == "context_record":
+                value = store.record_context_request(
+                    {
+                        **request.get("fields", {}),
+                        "host_id": host_id,
+                        "session_id": session_id,
+                    },
+                    self._operation(request),
+                )
+            elif method == "memory_write":
+                action = request.get("action")
+                fields = {
+                    **request.get("fields", {}),
+                    "source_identity": {
+                        "host_id": host_id,
+                        "session_id": session_id,
+                        **request.get("fields", {}).get("source_identity", {}),
+                    },
+                }
+                if action == "record":
+                    value = store.record_knowledge(fields, self._operation(request))
+                elif action == "revise":
+                    value = store.revise_knowledge(fields, self._operation(request))
+                elif action == "checkpoint":
+                    value = store.checkpoint(fields, self._operation(request))
+                else:
+                    raise ValueError("memory_write action must be record, revise, or checkpoint")
+            elif method == "specialist_create":
+                if not role or role["role"] not in {"main", "exploration"}:
+                    raise ValueError("Only managed research agents may delegate specialists")
+                with store._connection() as db:
+                    association = store._association(db, host_id, session_id)
+                    attempt = db.execute(
+                        "SELECT * FROM attempts WHERE association_id=? AND ended_at IS NULL",
+                        (association["association_id"],),
+                    ).fetchone()
+                fields = request.get("fields", {})
+                value = store.specialist_create(
+                    {
+                        **fields,
+                        "parent_session_id": session_id,
+                        "node_id": fields.get("node_id")
+                        or (attempt["node_id"] if attempt else role["node_id"]),
+                        "attempt_id": attempt["attempt_id"] if attempt else None,
+                    },
+                    self._operation(request),
+                )
+            elif method == "specialist_finish":
+                value = store.specialist_finish(
+                    {
+                        **request.get("fields", {}),
+                        "parent_session_id": session_id,
+                    },
+                    self._operation(request),
+                )
+            elif method == "specialist_get":
+                value = store.specialist_get(request.get("task_id"))
+            elif method == "review_todo_next":
+                value = store.review_todo_next(request.get("node_id"))
+            elif method == "review_todo_state":
+                value = store.review_todo_state(
+                    request.get("todo_id"), request.get("state"), self._operation(request)
+                )
+            elif method == "guidance_register":
+                path_value = request.get("path")
+                if not isinstance(path_value, str) or not Path(path_value).is_absolute():
+                    raise ValueError("Guidance requires an absolute host-supplied path")
+                path = Path(path_value).expanduser().resolve()
+                if not path.is_file():
+                    raise ValueError("Guidance document does not exist")
+                content = path.read_text(encoding="utf-8")
+                if len(content.encode("utf-8")) > 2 * 1024 * 1024:
+                    raise ValueError("Guidance document exceeds 2 MiB")
+                value = store.guidance_register(
+                    {
+                        "path": str(path),
+                        "version": request.get("version")
+                        or hashlib.sha256(content.encode()).hexdigest()[:12],
+                        "content": content,
+                    },
+                    self._operation(request),
+                )
+            elif method == "guidance_status":
+                value = store.guidance_status()
             elif method == "propose":
                 value = store.propose(
                     request.get("question"),
@@ -706,6 +904,7 @@ class NativeService:
                     request.get("purpose", "explore"),
                     request.get("strategy", "continue"),
                     request.get("anchor_ref"),
+                    request.get("question_ref"),
                 )
             elif method == "focus":
                 value = store.focus(
@@ -745,6 +944,7 @@ class NativeService:
                     request.get("gaps", []),
                     items,
                     operation_id,
+                    request.get("knowledge_refs", []),
                 )
             elif method == "relate":
                 value = store.relate(
@@ -826,19 +1026,12 @@ class NativeService:
                 if saved is not None:
                     value = saved
                 else:
-                    state = store.query(host_id, session_id)
                     snapshot_id = request.get("snapshot_id")
-                    snapshot = next(
-                        (row for row in state["snapshots"] if row["snapshot_id"] == snapshot_id),
-                        None,
-                    )
-                    if snapshot is None:
+                    selected_snapshot = store.reference_query(snapshot_id, full=True)
+                    if selected_snapshot["kind"] != "snapshot":
                         raise ValueError(f"Unknown snapshot: {snapshot_id}")
-                    source_attempt = next(
-                        row
-                        for row in state["attempts"]
-                        if row["attempt_id"] == snapshot["attempt_id"]
-                    )
+                    snapshot = selected_snapshot["value"]
+                    source_attempt = store.reference_query(snapshot["attempt_id"], full=True)["value"]
                     if source_attempt["state"] == "unknown" or source_attempt["ended_at"] is None:
                         raise ValueError(
                             "The source work segment is still active or unverified; "

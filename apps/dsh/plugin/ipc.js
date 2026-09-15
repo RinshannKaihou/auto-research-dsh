@@ -29,7 +29,8 @@ export class StorageClient {
     this.buffer = Buffer.alloc(0);
     this.timeoutMs = timeoutMs;
     const modulePath = pythonModulePath ?? bundledPythonPath();
-    const registry = registryPath ?? join(homedir(), '.dsh', 'auto-research-v5', 'registry.sqlite3');
+    const dshHome = process.env.DSH_HOME || join(homedir(), '.dsh');
+    const registry = registryPath ?? join(dshHome, 'auto-research-v5', 'registry.sqlite3');
     this.child = spawn(python, ['-m', 'auto_research.service', '--registry', registry], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { PATH: process.env.PATH, PYTHONIOENCODING: 'utf-8', PYTHONPATH: modulePath },

@@ -6,7 +6,7 @@ import { registerResearchTools } from './tools.js';
 import { registerResearchEvents } from './events.js';
 
 export const name = 'auto-research-v5';
-export const inject = ['commands', 'tools', 'systemPrompt', 'llm', 'goals', 'agents', 'sessionController', 'jobs', 'sessionProjections'];
+export const inject = ['commands', 'tools', 'systemPrompt', 'llm', 'goals', 'agents', 'sessionController', 'jobs', 'sessionProjections', 'subagents'];
 export const RPC_CHANNEL = '/research-v5';
 
 class UnavailableStorage {
@@ -40,6 +40,7 @@ export function apply(ctx, config = {}) {
       'When this native session is associated with a research project, use research_* tools to preserve durable research structure.',
       'Use DSH native tools for actual work. Publications may be partial and do not imply scientific validation. Finish work segments and close nodes explicitly.',
       'Do not start autonomous research unless the user enabled it through /research auto.',
+      'In manual mode, start a consolidation reviewer only when the user explicitly asks for consolidation or review.',
     ].join('\n'),
   }));
   disposers.push(registerResearchCommand(ctx, domain));
@@ -58,6 +59,21 @@ export function apply(ctx, config = {}) {
         if (endpoint === 'query' || endpoint === 'status') {
           return { ok: true, value: await domain.query(agent) };
         }
+        if (endpoint === 'history.page') {
+          return { ok: true, value: await domain.page(agent, payload.collection, payload.cursor ?? {}, payload.limit ?? 50) };
+        }
+        if (endpoint === 'usage.page') {
+          return { ok: true, value: await domain.page(agent, 'usage', payload.cursor ?? {}, payload.limit ?? 50) };
+        }
+        if (endpoint === 'changes.page') {
+          return { ok: true, value: await domain.page(agent, 'changes', payload.cursor ?? {}, payload.limit ?? 50) };
+        }
+        if (endpoint === 'reference.get') {
+          return { ok: true, value: await domain.lookup(agent, { ref: payload.ref }) };
+        }
+        if (endpoint === 'guidance.status') return { ok: true, value: await domain.guidanceStatus(agent) };
+        if (endpoint === 'guidance.register') return { ok: true, value: await domain.guidanceRegister(agent, payload.path, payload.version, id) };
+        if (endpoint === 'context.preview') return { ok: true, value: await domain.contextPreview(agent) };
         if (endpoint === 'open') {
           return { ok: true, value: await domain.open(agent, {
             goal: payload.goal,
@@ -67,9 +83,12 @@ export function apply(ctx, config = {}) {
           ok: true,
           value: await domain.auto(agent, id),
         };
-        if (endpoint === 'pause' || endpoint === 'resume') {
+        if (endpoint === 'pause' || (endpoint === 'resume' && !payload.targetSessionId)) {
           return { ok: true, value: await domain.projectGoals(agent, endpoint, id) };
         }
+        if (endpoint === 'resume') return { ok: true, value: await domain.resumeSession(agent, payload.targetSessionId, id) };
+        if (endpoint === 'retry') return { ok: true, value: await domain.resumeSession(agent, payload.targetSessionId, id, { retry: true }) };
+        if (endpoint === 'verify-stop') return { ok: true, value: await domain.verifyStop(agent, id) };
         if (endpoint === 'focus') {
           return { ok: true, value: await domain.focus(agent, payload.nodeId ?? null, id) };
         }

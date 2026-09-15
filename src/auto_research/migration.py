@@ -1,8 +1,8 @@
-"""Legacy inventory and explicit copy-only migration into schema 3.
+"""Legacy inventory and explicit copy-only migration into schema 4.
 
 Preflight reads committed SQLite state without reconciling execution. Migration
 creates a new copy, an integrity-checked database backup, and an idempotent
-schema-3 import; it never mutates the source project.
+schema-4 import; it never mutates the source project.
 """
 
 from __future__ import annotations
@@ -323,9 +323,11 @@ def _max_counter(values: list[str], prefix: str) -> int:
 
 def migrate_native_copy(source: Path, destination: Path) -> dict:
     """Upgrade only a complete copy; take a consistent DB backup before file copying."""
-    marker = destination / ".research" / "migration-native-to-3.json"
-    if marker.is_file():
-        value = json.loads(marker.read_text())
+    marker = destination / ".research" / "migration-native-to-4.json"
+    previous_marker = destination / ".research" / "migration-native-to-3.json"
+    existing_marker = marker if marker.is_file() else previous_marker
+    if existing_marker.is_file():
+        value = json.loads(existing_marker.read_text())
         if value["source_root"] != str(source):
             raise ValueError("Destination belongs to another source")
         return {
@@ -375,7 +377,7 @@ def migrate_native_copy(source: Path, destination: Path) -> dict:
         state = store.query()
         value = {
             "source_root": str(source),
-            "schema_version": 3,
+            "schema_version": 4,
             "known_usage": state["usage"]["known"],
             "attempt_count": len(state["attempts"]),
             "files": project_file_manifest(temporary, []),
@@ -389,14 +391,14 @@ def migrate_native_copy(source: Path, destination: Path) -> dict:
 
 
 def migrate_copy(source: str | Path, destination: str | Path) -> dict:
-    """Copy a schema-1 project and import it into schema 3 without mutating source."""
+    """Copy a legacy or native project into schema 4 without mutating source."""
     source = Path(source).expanduser().resolve(strict=True)
     destination = Path(destination).expanduser().resolve()
     if destination.is_relative_to(source):
         raise ValueError("Migration destination must be outside the source project")
     with readonly_database(source) as original:
         version = original.execute("PRAGMA user_version").fetchone()[0]
-    if version in {2, 3}:
+    if version in {2, 3, 4}:
         return migrate_native_copy(source, destination)
     marker = destination / ".research" / "migration-schema1-to-2.json"
     if marker.is_file():
@@ -552,6 +554,33 @@ def migrate_copy(source: str | Path, destination: str | Path) -> dict:
                             imported_at,
                         ),
                     )
+                for node in db.execute(
+                    "SELECT node_id,question,purpose,created_at FROM nodes WHERE question_ref IS NULL ORDER BY rowid"
+                ).fetchall():
+                    question = store._record_knowledge_in_tx(
+                        db,
+                        {
+                            "kind": "open_question",
+                            "statement": node["question"],
+                            "scope": {"purpose": node["purpose"]},
+                            "conditions": {},
+                            "status": "working",
+                            "evidence_refs": [],
+                            "source_identity": {"kind": "legacy-node", "node_id": node["node_id"]},
+                            "dependencies": [],
+                            "author": "legacy-migration",
+                            "node_id": node["node_id"],
+                        },
+                    )
+                    knowledge_id, revision = question["ref"].removeprefix("knowledge/").split("@", 1)
+                    db.execute(
+                        "UPDATE nodes SET question_ref=? WHERE node_id=?",
+                        (question["ref"], node["node_id"]),
+                    )
+                    db.execute(
+                        "INSERT OR REPLACE INTO node_questions VALUES(?,?,?,?)",
+                        (node["node_id"], knowledge_id, int(revision), node["created_at"]),
+                    )
                 for name, value in {
                     "node": _max_counter(node_ids, "X"),
                     "attempt": _max_counter(attempt_ids, "A"),
@@ -572,6 +601,7 @@ def migrate_copy(source: str | Path, destination: str | Path) -> dict:
             "source_database_sha256": source_db_digest,
             "migrated_at": imported_at,
             "project_id": project["project_id"],
+            "target_schema_version": 4,
             "legacy_known_usage": report["budget"]["known_spent"],
             "legacy_unknown_attempts": report["budget"]["unknown_attempts"],
             "file_manifest": report["files"],

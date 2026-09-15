@@ -6,6 +6,7 @@ export function projectGraph(state) {
   const pubs = new Map((state.publications ?? []).map(p => [p.publication_id,p]));
   const snapshots = new Map((state.snapshots ?? []).map(s => [s.snapshot_id,s]));
   const legacy = new Map((state.legacy_refs ?? []).map(r => [r.ref,r]));
+  const knowledge = new Map((state.knowledge ?? []).map(r => [r.ref,r]));
   const owner = record => {
     // A declared but missing node must not be silently assigned elsewhere.
     const id = record?.node_id ?? attempts.get(record?.attempt_id)?.node_id;
@@ -17,6 +18,7 @@ export function projectGraph(state) {
     if (legacy.has(ref)) return owner(legacy.get(ref));
     if (attempts.has(ref)) return owner(attempts.get(ref));
     if (snapshots.has(ref)) return owner(snapshots.get(ref));
+    if (knowledge.has(ref)) return owner(knowledge.get(ref));
     if (ref.startsWith('pub/')) {
       const [id,itemId] = ref.slice(4).split('#');
       const p = pubs.get(id);
@@ -37,10 +39,10 @@ export function projectGraph(state) {
     edges.get(id).records.push(record);
   }
   for (const n of nodes.values()) {
-    for (const [kind,refs] of [['input',n.inputs ?? []],['anchor',n.anchor_ref ? [n.anchor_ref] : []]]) {
+    for (const [kind,refs] of [['input',n.inputs ?? []],['anchor',n.anchor_ref ? [n.anchor_ref] : []],['question',n.question_ref ? [n.question_ref] : []]]) {
       for (const ref of refs) {
         const source = resolve(ref);
-        const record = {kind,source_ref:ref,target_ref:n.node_id,label:kind === 'anchor' ? '历史锚点' : '固定输入',source,target:n.node_id};
+        const record = {kind,source_ref:ref,target_ref:n.node_id,label:kind === 'anchor' ? '历史锚点' : kind === 'question' ? '议程问题' : '固定输入',source,target:n.node_id};
         n.references.push(record);
         link(source,n.node_id,record);
       }

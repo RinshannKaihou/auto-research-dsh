@@ -1,4 +1,4 @@
-"""Schema-3 domain store for the native DSH research plugin.
+"""Schema-4 domain store for the native DSH research plugin.
 
 DSH owns model execution, tools, sessions, and transcripts.  This module only
 owns research metadata, immutable publications, observations, and idempotency.
@@ -17,9 +17,11 @@ from typing import Any, Callable, Iterator
 from uuid import uuid4
 
 from .errors import ConflictError, NotFoundError, ValidationError
+from .memory_store import MemoryStore, migrate_schema4, parse_knowledge_ref
+from .query_store import QueryStore
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 ATTEMPT_STATES = frozenset({"open", "finished", "stopped", "unknown"})
 NODE_STATES = frozenset({"proposed", "open", "closed"})
 
@@ -57,7 +59,7 @@ def _number(value: Any, label: str) -> float:
 from .workflow_store import WorkflowStore, DDL, migrate_schema3
 
 
-class NativeStore(WorkflowStore):
+class NativeStore(QueryStore, MemoryStore, WorkflowStore):
     """Transactional store used only by the native DSH plugin."""
 
     def __init__(self, root: str | Path, *, readonly: bool = False):
@@ -68,7 +70,7 @@ class NativeStore(WorkflowStore):
         if readonly:
             with self._connection() as db:
                 if db.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
-                    raise ValidationError("Read-only view requires schema 3")
+                    raise ValidationError("Read-only view requires schema 4")
             return
         self.meta.mkdir(parents=True, exist_ok=True)
         if self.db_path.exists():
@@ -77,6 +79,9 @@ class NativeStore(WorkflowStore):
             if version == 2:
                 migrate_schema3(self.db_path)
                 version = 3
+            if version == 3:
+                migrate_schema4(self.db_path)
+                version = 4
             if version not in {0, SCHEMA_VERSION}:
                 raise ValidationError(
                     f"Schema {version} must be migrated before native plugin writes"
@@ -84,6 +89,9 @@ class NativeStore(WorkflowStore):
         with self._connection() as db:
             db.execute("PRAGMA journal_mode=WAL")
             self._create_schema(db)
+            has_project = bool(db.execute("SELECT 1 FROM project LIMIT 1").fetchone())
+        if has_project:
+            self.rebuild_memory_projection()
 
     @staticmethod
     def _create_schema(db: sqlite3.Connection) -> None:
@@ -98,7 +106,7 @@ class NativeStore(WorkflowStore):
             CREATE TABLE IF NOT EXISTS nodes (
                 node_id TEXT PRIMARY KEY, question TEXT NOT NULL, why_now TEXT NOT NULL,
                 plan TEXT NOT NULL, inputs TEXT NOT NULL, purpose TEXT NOT NULL,
-                strategy TEXT NOT NULL, anchor_ref TEXT,
+                strategy TEXT NOT NULL, anchor_ref TEXT, question_ref TEXT,
                 status TEXT NOT NULL,
                 created_at TEXT NOT NULL, closed_at TEXT
             );
@@ -145,6 +153,7 @@ class NativeStore(WorkflowStore):
                 publication_id TEXT NOT NULL REFERENCES publications(publication_id),
                 item_id TEXT NOT NULL, kind TEXT NOT NULL, content TEXT NOT NULL,
                 object_version TEXT, object_kind TEXT, source_path TEXT,
+                knowledge_refs TEXT NOT NULL DEFAULT '[]',
                 PRIMARY KEY(publication_id, item_id)
             );
             CREATE TABLE IF NOT EXISTS relations (
@@ -203,7 +212,7 @@ class NativeStore(WorkflowStore):
             CREATE TABLE IF NOT EXISTS counters (
                 name TEXT PRIMARY KEY, value INTEGER NOT NULL
             );
-            PRAGMA user_version=3;
+            PRAGMA user_version=4;
             """
         )
         db.executescript(DDL)
@@ -215,9 +224,17 @@ class NativeStore(WorkflowStore):
             db.execute("ALTER TABLE nodes ADD COLUMN strategy TEXT NOT NULL DEFAULT 'continue'")
         if "anchor_ref" not in node_columns:
             db.execute("ALTER TABLE nodes ADD COLUMN anchor_ref TEXT")
+        if "question_ref" not in node_columns:
+            db.execute("ALTER TABLE nodes ADD COLUMN question_ref TEXT")
         item_columns = {row[1] for row in db.execute("PRAGMA table_info(publication_items)")}
         if "object_kind" not in item_columns:
             db.execute("ALTER TABLE publication_items ADD COLUMN object_kind TEXT")
+        if "knowledge_refs" not in item_columns:
+            db.execute(
+                "ALTER TABLE publication_items ADD COLUMN knowledge_refs TEXT NOT NULL DEFAULT '[]'"
+            )
+        MemoryStore._create_memory_schema(db)
+        db.execute("PRAGMA user_version=4")
 
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
@@ -268,6 +285,8 @@ class NativeStore(WorkflowStore):
                         raise ConflictError(f"request_id {request_id!r} was reused")
                     result = json.loads(previous["response"])
                     db.commit()
+                    if operation in {"propose", "knowledge.record", "knowledge.revise", "memory.checkpoint", "guidance.register"}:
+                        self.rebuild_memory_projection()
                     return result
                 result = work(db)
                 db.execute(
@@ -275,6 +294,8 @@ class NativeStore(WorkflowStore):
                     (request_id, operation, encoded, _json(result), _now()),
                 )
                 db.commit()
+                if operation in {"propose", "knowledge.record", "knowledge.revise", "memory.checkpoint", "guidance.register"}:
+                    self.rebuild_memory_projection()
                 return result
             except BaseException:
                 db.rollback()
@@ -416,6 +437,7 @@ class NativeStore(WorkflowStore):
         purpose: str = "explore",
         strategy: str = "continue",
         anchor_ref: str | None = None,
+        question_ref: str | None = None,
     ) -> dict:
         if inputs is None:
             inputs = []
@@ -433,13 +455,47 @@ class NativeStore(WorkflowStore):
             "purpose": _text(purpose, "purpose"),
             "strategy": strategy,
             "anchor_ref": anchor_ref,
+            "question_ref": question_ref,
         }
 
         def work(db: sqlite3.Connection) -> dict:
             self._project(db)
+            node_id = self._next(db, "node", "X")
+            qref = payload["question_ref"]
+            if qref:
+                kid, revision = parse_knowledge_ref(qref)
+                question_row = db.execute(
+                    "SELECT e.kind,r.statement FROM knowledge_entries e "
+                    "JOIN knowledge_revisions r USING(knowledge_id) "
+                    "WHERE e.knowledge_id=? AND r.revision=?",
+                    (kid, revision),
+                ).fetchone()
+                if not question_row:
+                    raise NotFoundError(f"Unknown research reference: {qref}")
+                if question_row["kind"] != "open_question":
+                    raise ValidationError("question_ref must identify an open_question")
+            else:
+                knowledge = self._record_knowledge_in_tx(
+                    db,
+                    {
+                        "kind": "open_question",
+                        "statement": payload["question"],
+                        "scope": {"purpose": payload["purpose"]},
+                        "conditions": {},
+                        "status": "working",
+                        "evidence_refs": [],
+                        "source_identity": {"kind": "node-proposal", "request_id": request_id},
+                        "dependencies": list(payload["inputs"]),
+                        "author": "research-agent",
+                        "node_id": None,
+                    },
+                )
+                qref = knowledge["ref"]
+                kid, revision = parse_knowledge_ref(qref)
             value = {
-                "node_id": self._next(db, "node", "X"),
+                "node_id": node_id,
                 **payload,
+                "question_ref": qref,
                 "status": "proposed",
                 "created_at": _now(),
                 "closed_at": None,
@@ -450,8 +506,8 @@ class NativeStore(WorkflowStore):
                 self._require_ref(db, anchor_ref)
             db.execute(
                 "INSERT INTO nodes "
-                "(node_id,question,why_now,plan,inputs,purpose,strategy,anchor_ref,"
-                "status,created_at,closed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                "(node_id,question,why_now,plan,inputs,purpose,strategy,anchor_ref,question_ref,"
+                "status,created_at,closed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     value["node_id"],
                     value["question"],
@@ -461,10 +517,19 @@ class NativeStore(WorkflowStore):
                     value["purpose"],
                     value["strategy"],
                     value["anchor_ref"],
+                    value["question_ref"],
                     value["status"],
                     value["created_at"],
                     value["closed_at"],
                 ),
+            )
+            db.execute(
+                "INSERT OR REPLACE INTO node_questions VALUES(?,?,?,?)",
+                (node_id, kid, revision, value["created_at"]),
+            )
+            db.execute(
+                "UPDATE knowledge_entries SET node_id=COALESCE(node_id,?) WHERE knowledge_id=?",
+                (node_id, kid),
             )
             self._event(db, "node.proposed", value)
             return value
@@ -591,6 +656,8 @@ class NativeStore(WorkflowStore):
             }
             db.execute("INSERT INTO notes VALUES (?,?,?,?,?)", tuple(value.values()))
             self._event(db, "research.noted", value)
+            if kind == "correction":
+                self.queue_review_in_tx(db, "correction-note", value["note_id"], attempt["node_id"])
             return value
 
         return self._mutate(
@@ -642,6 +709,7 @@ class NativeStore(WorkflowStore):
                         (at, session_id),
                     )
             self._event(db, "attempt.finished", value)
+            self.queue_review_in_tx(db, "attempt-finished", attempt["attempt_id"], attempt["node_id"])
             if queued:
                 next_id = self._next(db, "attempt", "A")
                 db.execute(
@@ -682,11 +750,17 @@ class NativeStore(WorkflowStore):
         gaps: list[str],
         items: list[dict],
         request_id: str,
+        knowledge_refs: list[str] | None = None,
     ) -> dict:
         if status not in {"partial", "complete"}:
             raise ValidationError("publication status must be partial or complete")
         if not isinstance(gaps, list) or not all(isinstance(x, str) for x in gaps):
             raise ValidationError("gaps must be text entries")
+        knowledge_refs = knowledge_refs or []
+        if not isinstance(knowledge_refs, list) or not all(
+            isinstance(ref, str) for ref in knowledge_refs
+        ):
+            raise ValidationError("knowledge_refs must be research reference strings")
         normalized = []
         seen = set()
         for raw in items:
@@ -704,6 +778,7 @@ class NativeStore(WorkflowStore):
                     "object_version": raw.get("object_version"),
                     "object_kind": raw.get("object_kind"),
                     "source_path": raw.get("source_path"),
+                    "knowledge_refs": _copy(raw.get("knowledge_refs", [])),
                 }
             )
         payload = {
@@ -713,11 +788,19 @@ class NativeStore(WorkflowStore):
             "summary": _text(summary, "summary"),
             "gaps": gaps,
             "items": normalized,
+            "knowledge_refs": knowledge_refs,
         }
 
         def work(db: sqlite3.Connection) -> dict:
             association = self._association(db, host_id, session_id)
             attempt = self._attempt(db, association["association_id"])
+            for ref in knowledge_refs:
+                kid, revision = parse_knowledge_ref(ref)
+                if not db.execute(
+                    "SELECT 1 FROM knowledge_revisions WHERE knowledge_id=? AND revision=?",
+                    (kid, revision),
+                ).fetchone():
+                    raise NotFoundError(f"Unknown research reference: {ref}")
             publication_id = self._next(db, "publication", "P")
             at = _now()
             db.execute(
@@ -736,8 +819,8 @@ class NativeStore(WorkflowStore):
             for item in normalized:
                 db.execute(
                     "INSERT INTO publication_items "
-                    "(publication_id,item_id,kind,content,object_version,object_kind,source_path) "
-                    "VALUES (?,?,?,?,?,?,?)",
+                    "(publication_id,item_id,kind,content,object_version,object_kind,source_path,knowledge_refs) "
+                    "VALUES (?,?,?,?,?,?,?,?)",
                     (
                         publication_id,
                         item["item_id"],
@@ -746,9 +829,27 @@ class NativeStore(WorkflowStore):
                         item["object_version"],
                         item["object_kind"],
                         item["source_path"],
+                        _json(item["knowledge_refs"]),
                     ),
                 )
+                for ref in item["knowledge_refs"]:
+                    kid, revision = parse_knowledge_ref(ref)
+                    if not db.execute(
+                        "SELECT 1 FROM knowledge_revisions WHERE knowledge_id=? AND revision=?",
+                        (kid, revision),
+                    ).fetchone():
+                        raise NotFoundError(f"Unknown research reference: {ref}")
+                    db.execute(
+                        "INSERT OR IGNORE INTO publication_knowledge VALUES(?,?,?)",
+                        (publication_id, kid, revision),
+                    )
                 refs.append(f"pub/{publication_id}#{item['item_id']}")
+            for ref in knowledge_refs:
+                kid, revision = parse_knowledge_ref(ref)
+                db.execute(
+                    "INSERT OR IGNORE INTO publication_knowledge VALUES(?,?,?)",
+                    (publication_id, kid, revision),
+                )
             value = {"publication_id": publication_id, "refs": refs, "created_at": at}
             self.notify_in_transaction(
                 db,
@@ -763,6 +864,7 @@ class NativeStore(WorkflowStore):
                 },
             )
             self._event(db, "publication.created", value)
+            self.queue_review_in_tx(db, "publication", f"pub/{publication_id}", attempt["node_id"])
             return value
 
         return self._mutate("publish", payload, request_id, work)
@@ -793,17 +895,31 @@ class NativeStore(WorkflowStore):
 
     @staticmethod
     def _require_ref(db: sqlite3.Connection, ref: str) -> None:
-        if ref.startswith("pub/") and "#" in ref:
-            publication_id, item_id = ref[4:].split("#", 1)
+        if ref.startswith("knowledge/"):
+            kid, revision = parse_knowledge_ref(ref)
             if db.execute(
+                "SELECT 1 FROM knowledge_revisions WHERE knowledge_id=? AND revision=?",
+                (kid, revision),
+            ).fetchone():
+                return
+        if ref.startswith("pub/"):
+            publication_id, _, item_id = ref[4:].partition("#")
+            if item_id and db.execute(
                 "SELECT 1 FROM publication_items WHERE publication_id=? AND item_id=?",
                 (publication_id, item_id),
+            ).fetchone():
+                return
+            if not item_id and db.execute(
+                "SELECT 1 FROM publications WHERE publication_id=?", (publication_id,)
             ).fetchone():
                 return
         if db.execute("SELECT 1 FROM nodes WHERE node_id=?", (ref,)).fetchone():
             return
         if db.execute("SELECT 1 FROM legacy_refs WHERE ref=?", (ref,)).fetchone():
             return
+        for table, column in (("notes", "note_id"), ("attempts", "attempt_id"), ("snapshots", "snapshot_id")):
+            if db.execute(f"SELECT 1 FROM {table} WHERE {column}=?", (ref,)).fetchone():
+                return
         raise NotFoundError(f"Unknown research reference: {ref}")
 
     def close_node(self, node_id: str, request_id: str) -> dict:
@@ -870,6 +986,13 @@ class NativeStore(WorkflowStore):
                     ).fetchone()
                     if attempt:
                         attempt_id, node_id = attempt["attempt_id"], attempt["node_id"]
+                    else:
+                        specialist = db.execute(
+                            "SELECT attempt_id,node_id FROM specialist_bindings WHERE session_id=?",
+                            (session_id,),
+                        ).fetchone()
+                        if specialist:
+                            attempt_id, node_id = specialist["attempt_id"], specialist["node_id"]
             if host_id and session_id and turn is not None:
                 frozen = db.execute(
                     "SELECT * FROM turn_bindings WHERE host_id=? AND session_id=? AND turn=?",
@@ -1186,6 +1309,7 @@ class NativeStore(WorkflowStore):
                     {
                         **dict(item),
                         "content": json.loads(item["content"]),
+                        "knowledge_refs": json.loads(item["knowledge_refs"]),
                         "ref": f"pub/{item['publication_id']}#{item['item_id']}",
                     }
                     for item in db.execute(
@@ -1258,8 +1382,48 @@ class NativeStore(WorkflowStore):
                 "usage_observations": usage_observations,
             }
             result["workflow"] = self.workflow_view(db, session_id)
+            result["knowledge"] = [
+                self._decode_knowledge(row)
+                for row in db.execute(
+                    "SELECT e.kind,e.node_id,r.* FROM knowledge_entries e "
+                    "JOIN knowledge_revisions r USING(knowledge_id) "
+                    "WHERE r.revision=(SELECT MAX(revision) FROM knowledge_revisions "
+                    "WHERE knowledge_id=e.knowledge_id) ORDER BY e.rowid"
+                )
+            ]
+            result["checkpoints"] = [
+                {
+                    **dict(row),
+                    "state": json.loads(row["state"]),
+                    "source_identity": json.loads(row["source_identity"]),
+                }
+                for row in db.execute(
+                    "SELECT * FROM node_checkpoints ORDER BY rowid"
+                )
+            ]
+            result["specialists"] = [
+                self._decode_specialist(row)
+                for row in db.execute(
+                    "SELECT * FROM specialist_tasks ORDER BY created_at"
+                )
+            ]
             result["usage"].update(self.workflow_usage(db))
             if ref:
+                if ref.startswith("knowledge/"):
+                    kid, revision = parse_knowledge_ref(ref)
+                    selected_knowledge = db.execute(
+                        "SELECT e.kind,e.node_id,r.* FROM knowledge_entries e "
+                        "JOIN knowledge_revisions r USING(knowledge_id) "
+                        "WHERE e.knowledge_id=? AND r.revision=?",
+                        (kid, revision),
+                    ).fetchone()
+                    if not selected_knowledge:
+                        raise NotFoundError(f"Unknown research reference: {ref}")
+                    result["selected"] = {
+                        "kind": "knowledge",
+                        "value": self._decode_knowledge(selected_knowledge),
+                    }
+                    return result
                 selected = db.execute("SELECT * FROM nodes WHERE node_id=?", (ref,)).fetchone()
                 if selected:
                     value = dict(selected)
@@ -1298,31 +1462,4 @@ class NativeStore(WorkflowStore):
             return result
 
     def memory_view(self, host_id: str, session_id: str, max_chars: int = 12_000) -> dict:
-        state = self.query(host_id, session_id)
-        discussion = state["workflow"].get("session") or {}
-        compact = {
-            "session_role": discussion.get("role"),
-            "discussion_context": discussion.get("context")
-            if discussion.get("role") in {"discussion", "handoff"}
-            else None,
-            "task": next(
-                (t for t in state["workflow"]["tasks"] if t["session_id"] == session_id), None
-            ),
-            "goal": state["project"]["goal"],
-            "control": state["project"]["control"],
-            "usage": state["usage"],
-            "focus": state["attempt"],
-            "recent_notes": state["notes"][-5:],
-            "recent_publications": state["publications"][-5:],
-            "nodes": state["nodes"],
-        }
-        text = _json(compact)
-        digest = hashlib.sha256(text.encode()).hexdigest()
-        truncated = len(text) > max_chars
-        if len(text) > max_chars:
-            compact["nodes"] = state["nodes"][-10:]
-            compact["recent_publications"] = state["publications"][-3:]
-            text = _json(compact)
-        if len(text) > max_chars:
-            text = text[: max_chars - 80] + "\n...[research context truncated; use research.query]"
-        return {"text": text, "source_digest": digest, "truncated": truncated}
+        return self.context_view(host_id, session_id, max_chars)

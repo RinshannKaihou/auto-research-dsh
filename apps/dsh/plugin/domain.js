@@ -13,13 +13,18 @@ export class ResearchDomain {
     Object.assign(this, { ctx, storage, adapter });
     this.hostId = config.hostId ?? 'local';
     this.maxGoalRounds = config.maxGoalRounds;
+    this.memoryReadTimeoutMs = config.memoryReadTimeoutMs ?? 2000;
     this.autonomousConcurrency = config.autonomousConcurrency ?? 2;
+    this.specialistFanout = config.specialistFanout ?? 2;
+    this.subagentProvider = config.subagentProvider ?? 'spawn';
     this.loaded = new Map();
     this.locks = new Map();
     this.lastOwnedGoal = new Map();
     this.faults = new Map();
     this.turns = new Map();
     this.stopping = new Set();
+    this.pendingSpecialists = new Map();
+    this.associatedSessions = new Set();
   }
   identity(agent) { return agentIdentity(agent, this.hostId); }
   request(agent, method, fields = {}, id) {
@@ -27,14 +32,17 @@ export class ResearchDomain {
   }
   workflow(agent, action, fields = {}, id) { return this.request(agent, 'workflow', { action, fields }, id); }
   async state(agent) {
-    let state = await this.request(agent, 'query');
+    let state = await this.request(agent, 'control_state');
+    this.associatedSessions.add(agent.id);
     const key = state.project.project_id;
     if (!this.loaded.has(key)) {
       const cold = this.workflow(agent, 'cold', {}, `boot:${randomUUID()}`);
       this.loaded.set(key, cold);
     }
     await this.loaded.get(key);
-    return this.request(agent, 'query');
+    state = await this.request(agent, 'control_state');
+    this.associatedSessions.add(agent.id);
+    return state;
   }
   async serial(agent, fn) {
     const state = await this.state(agent), key = state.project.project_id;
@@ -91,9 +99,52 @@ export class ResearchDomain {
     });
     state.runtime = { ...state.workflow.run, sessions,
       running_count: sessions.filter(s => managed(s) && s.native_status === 'running').length,
+      specialist_count: sessions.filter(s => s.role === 'specialist' && s.native_status === 'running').length,
       pending_approvals: sessions.some(s => managed(s) && s.pending_approvals === null) ? null : sessions.filter(managed).reduce((n,s) => n+s.pending_approvals,0),
       current: sessions.find(s => s.session_id === agent.id) };
     return state;
+  }
+  page(agent, collection, cursor = {}, limit = 50) {
+    if (collection === 'usage') return this.request(agent, 'usage_page', { ...cursor, limit });
+    if (collection === 'changes') return this.request(agent, 'changes_page', { ...cursor, limit });
+    return this.request(agent, 'history_page', { collection, ...cursor, limit });
+  }
+  lookup(agent, fields = {}) { return this.request(agent, 'query', fields); }
+  guidanceStatus(agent) { return this.request(agent, 'guidance_status'); }
+  guidanceRegister(agent, path, version, id = operationId(agent)) {
+    return this.request(agent, 'guidance_register', { path, ...(version ? { version } : {}) }, id);
+  }
+  async contextPreview(agent) {
+    try {
+      const view = await this.request(agent, 'memory_context', { max_chars: 12000 });
+      return { ...view, status: 'fresh' };
+    } catch (error) {
+      const cached = this.contextCache?.get(agent.id);
+      if (cached) return { text: cached.text, source_digest: cached.sourceDigest, status: 'stale', error: error.message };
+      return { text: '', status: 'unavailable', error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+  async ensureSpecialist(agent) {
+    const parentId = agent?.session?.header?.parentSession;
+    if (!parentId) return null;
+    const pending = this.pendingSpecialists.get(parentId);
+    if (!pending) return null;
+    if (pending.childSessionId && pending.childSessionId !== agent.id) {
+      throw new Error('Specialist identity does not match the durable delegation intent');
+    }
+    if (!pending.bound) {
+      const parent = this.ctx.agents.get(parentId);
+      if (!parent) throw new Error('Specialist parent session is unavailable');
+      pending.childSessionId = agent.id;
+      pending.bound = this.request(parent, 'specialist_bind_child', {
+        task_id: pending.task.task_id,
+        child_session_id: agent.id,
+        node_id: pending.task.node_id,
+        cwd: agent.session.header.cwd,
+      }, `${pending.operationId}:bind`);
+    }
+    await pending.bound;
+    return pending.task;
   }
   async open(agent, { goal, root } = {}, id = operationId(agent)) {
     const projectRoot = root ?? agent.session.header.cwd;
@@ -118,7 +169,7 @@ export class ResearchDomain {
     });
   }
   async pauseSession(agent, reason, id = operationId(agent)) {
-    const state = await this.request(agent, 'query');
+    const state = await this.request(agent, 'control_state');
     const goal = this.owned(agent, state);
     await this.workflow(agent, 'session', { pause_reason: reason }, `${id}:reason`);
     if (goal?.phase === 'active') this.ctx.goals.pause(agent, { id: goal.id, revision: goal.revision });
@@ -150,7 +201,15 @@ export class ResearchDomain {
   async auto(agent, id = operationId(agent)) {
     return this.serial(agent, async () => {
       const state = await this.state(agent), run = state.workflow.run;
-      if (run.state === 'running') return { message: '自主研究已开始', state: run.state };
+      if (run.state === 'running') {
+        const main = await this.adapter.resolve(run.main_session_id);
+        const current = await this.state(main), row = current.workflow.session;
+        const goal = this.owned(main, current);
+        if (!row?.pause_reason && goal?.phase === 'active' && goal.activation !== 'disarmed') {
+          return { message: '自主研究已在运行；未创建重复 goal 或工作段', state: run.state, sessionId: main.id };
+        }
+        return { message: `项目允许自主推进，但主会话实际处于暂停状态：${row?.pause_reason ?? goal?.phase ?? 'unknown'}。请使用 /research resume --session ${main.id}`, state: run.state, sessionId: main.id, pause_reason: row?.pause_reason ?? null };
+      }
       if (['stopping','unverified'].includes(run.state)) throw new Error('停止待核实，尚不能再次开始');
       if (['paused','cold'].includes(run.state)) throw new Error('请使用“继续自主研究”并查看暂停原因');
       const main = await this.adapter.resolve(run.main_session_id);
@@ -194,6 +253,41 @@ export class ResearchDomain {
       return { message: action === 'pause' ? '已暂停后续续轮；当前轮允许收尾' : '已恢复项目暂停的执行；其他暂停原因保持不变', sessions: results };
     });
   }
+  async resumeSession(agent, sessionId, id = operationId(agent), { retry = false } = {}) {
+    return this.serial(agent, async () => {
+      const project = await this.state(agent);
+      const row = project.workflow.sessions.find(item => item.session_id === sessionId);
+      if (!managed(row)) throw new Error('目标会话不是本项目的受管理研究执行会话');
+      const target = await this.adapter.resolve(sessionId);
+      let current = await this.state(target);
+      if (!this.quiet(target)) throw new Error('目标会话仍在执行或存在运行中的归属作业');
+      if (!this.recoveryClear(target, current)) throw new Error('工具结果或作业退出状态尚未核实；不会重跑命令');
+      const reason = current.workflow.session?.pause_reason;
+      if (retry && !['fault', 'unverified', 'host_limit'].includes(reason)) {
+        throw new Error(`会话当前暂停原因是 ${reason ?? 'none'}，不符合故障重试条件`);
+      }
+      if (!retry && !['human', 'native_stop', 'finished', 'complete', 'fault', 'host_limit'].includes(reason)) {
+        throw new Error(`会话当前暂停原因是 ${reason ?? 'none'}；项目级暂停请使用 /research resume`);
+      }
+      const previous = current.attempt;
+      if (retry && previous) {
+        await this.request(target, 'finish', {
+          state: 'stopped', details: {
+            reason: 'explicit-retry-after-exit-verification', retry_of: previous.attempt_id,
+            original_details: previous.details ?? {},
+          },
+        }, `${id}:finish-prior`);
+        current = await this.state(target);
+      }
+      if (['stopped', 'complete', 'cold'].includes(project.workflow.run.state)) {
+        await this.workflow(agent, 'run', { state: 'running', new_generation: true }, `${id}:run`);
+      }
+      this.faults.delete(target.id);
+      const goal = await this.arm(target, current, `${id}:arm`, { restart: reason === 'complete' });
+      const refreshed = await this.state(target);
+      return { message: retry ? '故障退出已核实，已在原目录创建恢复工作段' : '已显式继续该研究会话', session_id: target.id, attempt_id: refreshed.attempt?.attempt_id ?? null, retry_of: previous?.attempt_id ?? null, goal_id: goal.id };
+    });
+  }
   async stopProject(agent, id = operationId(agent)) {
     return this.serial(agent, async () => {
       let state = await this.state(agent);
@@ -212,26 +306,43 @@ export class ResearchDomain {
           await this.workflow({ id: row.session_id }, 'session', { pause_reason: 'unverified' });
         }
       }
-      await this.settleStops(agent);
+      await this.settleStops(agent, false);
       state = await this.state(agent);
       return { message: state.workflow.run.state === 'stopped' ? '研究已停止' : '停止待核实；请查看原生会话与作业状态', state: state.workflow.run.state };
     });
   }
-  async settleStops(agent) {
+  async settleStops(agent, verify = false) {
     const state = await this.state(agent);
     if (!['stopping','unverified'].includes(state.workflow.run.state)) return;
     let complete = true;
     for (const row of state.workflow.sessions.filter(managed)) {
       const target = this.ctx.agents.get(row.session_id);
-      if (!target || row.pause_reason === 'unverified' || !this.quiet(target)) { complete = false; continue; }
+      if (!target || !this.quiet(target)) { complete = false; continue; }
       const current = await this.state(target);
       if (current.attempt?.state === 'unknown' || !this.recoveryClear(target,current)) { complete = false; continue; }
+      if (row.pause_reason === 'unverified' && !verify) { complete = false; continue; }
+      if (row.pause_reason === 'unverified') {
+        this.faults.delete(target.id);
+        await this.workflow(target, 'session', { pause_reason: 'stop' }, `verify-stop:${target.id}:reason`);
+      }
       if (current.attempt) await this.request(target, 'finish', { state: 'stopped', details: { reason: 'project-stop-confirmed' } });
       const task = state.workflow.tasks.find(t => t.session_id === target.id && !terminal(t.state));
       if (task) await this.workflow(agent, 'task_state', { task_id: task.task_id, state: 'cancelled' });
       this.stopping.delete(target.id);
     }
     await this.workflow(agent, 'run', { state: complete ? 'stopped' : 'unverified' });
+  }
+  async verifyStop(agent, id = operationId(agent)) {
+    return this.serial(agent, async () => {
+      const state = await this.state(agent);
+      if (!['stopping', 'unverified'].includes(state.workflow.run.state)) {
+        return { message: '项目当前没有待核实的停止操作', state: state.workflow.run.state };
+      }
+      await this.workflow(agent, 'intent', { intent_id: id, kind: 'verify-stop', state: 'requested' }, `${id}:intent`);
+      await this.settleStops(agent, true);
+      const final = await this.state(agent);
+      return { message: final.workflow.run.state === 'stopped' ? '所有受管理执行均已核实退出，研究已停止' : '仍有执行、工具或作业无法确认退出', state: final.workflow.run.state };
+    });
   }
   async dispatch(agent, nodeId, id) {
     return this.serial(agent, async () => {
@@ -302,10 +413,9 @@ export class ResearchDomain {
   async progress(agent, kind, value, id) {
     const state = await this.state(agent);
     const task = state.workflow.tasks.find(t => t.session_id === agent.id);
-    if (kind === 'published') value = state.publications.find(p => p.publication_id === value.publication_id) ?? value;
     if (kind === 'finished') await this.pauseSession(agent, 'finished');
     if (task) {
-      await this.workflow(agent, 'notify', { key: value.publication_id ?? value.attempt_id ?? (kind === 'finished' ? state.attempts.filter(a => state.associations.some(s => s.association_id === a.association_id && s.session_id === agent.id)).at(-1)?.attempt_id : null) ?? id, kind, reference: value.publication_id ? `pub/${value.publication_id}` : null, summary: value.summary ?? '', gaps: value.gaps ?? [] }, `${id}:notice`);
+      await this.workflow(agent, 'notify', { key: value.publication_id ?? value.attempt_id ?? id, kind, reference: value.publication_id ? `pub/${value.publication_id}` : null, summary: value.summary ?? '', gaps: value.gaps ?? [] }, `${id}:notice`);
       if (kind === 'failed') await this.workflow(agent, 'task_state', { task_id: task.task_id, state: 'failed', error: value.summary }, `${id}:failed`);
       if (kind === 'finished') {
         await this.pauseSession(agent, 'finished');
@@ -314,8 +424,82 @@ export class ResearchDomain {
     }
     await this.serial(agent, () => this.schedule(agent));
   }
+  async delegate(agent, args, exec, id, purpose = 'domain') {
+    if (!this.ctx.subagents?.start) throw new Error('Native DSH subagent service is unavailable');
+    const state = await this.state(agent), row = state.workflow.session;
+    if (!managed(row)) throw new Error('Only managed research agents may delegate specialists');
+    if (agent.session.header.parentSession) throw new Error('Specialists cannot recursively delegate');
+    let task = await this.request(agent, 'specialist_create', { fields: {
+      purpose, label: args.label ?? (purpose === 'review' ? '整理与复核' : '节点专家'),
+      prompt: args.prompt, inputs: args.inputs ?? [], node_id: args.node_id ?? state.attempt?.node_id ?? row.node_id,
+      fanout_limit: this.specialistFanout,
+    }, model_call: true }, id);
+    task = await this.request(agent, 'specialist_get', { task_id: task.task_id });
+    if (['completed', 'incomplete', 'cancelled'].includes(task.state) && task.exit_verified) {
+      return task;
+    }
+    if (['running', 'unverified'].includes(task.state)) return task;
+    const pending = { task, operationId: id, bound: null, childSessionId: null };
+    this.pendingSpecialists.set(agent.id, pending);
+    let run, result, disposed = false;
+    try {
+      const toolFilter = Array.isArray(args.tool_scope) && args.tool_scope.length
+        ? { allow: [...new Set([...args.tool_scope, 'research_query'])] }
+        : { deny: [
+          'research_dispatch', 'research_wait', 'research_propose', 'research_note',
+          'research_memory', 'research_snapshot', 'research_publish', 'research_relate',
+          'research_finish', 'research_close_node', 'research_delegate',
+        ] };
+      run = await this.ctx.subagents.start(this.subagentProvider, {
+        label: task.label,
+        prompt: [{ type: 'text', text: task.prompt }],
+        parent: agent,
+        signal: exec.signal,
+        maxDepth: 1,
+        toolFilter,
+        persona: purpose === 'review'
+          ? 'Act as an independent research consolidation reviewer. Read the fixed research context and return conflicts, applicable conditions, early negative results, and proposed revisions with sources. Do not mutate the research ledger.'
+          : 'Act as a bounded domain specialist. Answer only the fixed question from the supplied research context, preserve uncertainty and disagreements, and do not mutate the research ledger.',
+      });
+      if (!run.localAgent) throw new Error('The configured provider did not create a local native specialist session');
+      const nativeResult = Promise.resolve(run.result).then(
+        value => ({ ok: true, value }), error => ({ ok: false, error }),
+      );
+      pending.childSessionId = run.localAgent.id;
+      await this.ensureSpecialist(run.localAgent);
+      const settled = await nativeResult;
+      if (!settled.ok) throw settled.error;
+      const native = settled.value;
+      result = {
+        stop_reason: native.stopReason,
+        output: native.output ?? [],
+        ...(native.structured === undefined ? {} : { structured: native.structured }),
+        ...(native.diagnostic ? { diagnostic: native.diagnostic } : {}),
+      };
+      await run.dispose(); disposed = true;
+      const stateName = native.stopReason === 'completed' ? 'completed'
+        : native.stopReason === 'aborted' ? 'cancelled' : 'incomplete';
+      return await this.request(agent, 'specialist_finish', { fields: {
+        task_id: task.task_id, state: stateName, result,
+        error: native.diagnostic ?? null, exit_verified: true,
+      } }, `${id}:finish`);
+    } catch (error) {
+      let verified = !run;
+      if (run && !disposed) {
+        try { await run.dispose(); verified = true; } catch { verified = false; }
+      }
+      return this.request(agent, 'specialist_finish', { fields: {
+        task_id: task.task_id,
+        state: verified ? (exec.signal.aborted ? 'cancelled' : 'incomplete') : 'unverified',
+        result: result ?? {}, error: error instanceof Error ? error.message : String(error),
+        exit_verified: verified,
+      } }, `${id}:finish-error`);
+    } finally {
+      this.pendingSpecialists.delete(agent.id);
+    }
+  }
   async idle(agent) {
-    return this.serial(agent, async () => { await this.settleStops(agent); await this.schedule(agent); });
+    return this.serial(agent, async () => { await this.settleStops(agent, false); await this.schedule(agent); });
   }
   async createSession(parent, sessionId, cwd) {
     let child = this.ctx.agents.get(sessionId);

@@ -1,0 +1,434 @@
+"""Bounded, keyset-paginated reads for the native plugin.
+
+Each request owns an ordinary SQLite read transaction.  ``upper_id`` freezes a
+single traversal boundary; it does not claim a snapshot shared with later RPCs.
+"""
+
+from __future__ import annotations
+
+import base64
+import json
+import sqlite3
+from typing import Any
+
+from .errors import NotFoundError, ValidationError
+from .memory_store import parse_knowledge_ref
+
+
+COLLECTIONS = {
+    "nodes": ("nodes", "rowid"),
+    "attempts": ("attempts", "rowid"),
+    "notes": ("notes", "rowid"),
+    "publications": ("publications", "rowid"),
+    "relations": ("relations", "rowid"),
+    "legacy_refs": ("legacy_refs", "rowid"),
+    "snapshots": ("snapshots", "rowid"),
+    "restorations": ("restorations", "rowid"),
+    "associations": ("associations", "rowid"),
+    "sessions": ("workflow_sessions", "rowid"),
+    "tasks": ("exploration_tasks", "rowid"),
+    "notifications": ("workflow_notifications", "rowid"),
+    "specialists": ("specialist_tasks", "rowid"),
+    "knowledge": ("knowledge_revisions", "rowid"),
+    "checkpoints": ("node_checkpoints", "rowid"),
+    "review_todos": ("review_todos", "rowid"),
+}
+
+
+def _bounded_text(value: str, expand_ref: str, maximum: int = 8192) -> dict | str:
+    if len(value.encode("utf-8")) <= maximum:
+        return value
+    preview = value.encode("utf-8")[:maximum].decode("utf-8", errors="ignore")
+    return {"preview": preview, "truncated": True, "expand_ref": expand_ref}
+
+
+class QueryStore:
+    @staticmethod
+    def _decode_page_row(
+        db: sqlite3.Connection, collection: str, row: sqlite3.Row, *, full: bool = False
+    ) -> dict:
+        value = dict(row)
+        cursor = value.pop("_cursor")
+        if collection == "nodes":
+            value["inputs"] = json.loads(value["inputs"])
+        elif collection == "attempts":
+            value["details"] = json.loads(value["details"])
+        elif collection == "publications":
+            value["gaps"] = json.loads(value["gaps"])
+            value["items"] = []
+            for item in db.execute(
+                "SELECT * FROM publication_items WHERE publication_id=? ORDER BY item_id",
+                (value["publication_id"],),
+            ):
+                decoded = {
+                    **dict(item),
+                    "content": json.loads(item["content"]),
+                    "knowledge_refs": json.loads(item["knowledge_refs"]),
+                    "ref": f"pub/{item['publication_id']}#{item['item_id']}",
+                }
+                encoded_content = json.dumps(decoded["content"], ensure_ascii=False, sort_keys=True)
+                if not full and len(encoded_content.encode("utf-8")) > 8192:
+                    decoded["content"] = {
+                        "preview": encoded_content.encode("utf-8")[:8192].decode("utf-8", errors="ignore"),
+                        "truncated": True,
+                        "expand_ref": decoded["ref"],
+                    }
+                value["items"].append(decoded)
+        elif collection == "snapshots":
+            value["manifest"] = json.loads(value["manifest"])
+            value["complete"] = bool(value["complete"])
+        elif collection == "legacy_refs":
+            value["item"] = json.loads(value["item"])
+        elif collection == "tasks":
+            value["context"] = json.loads(value["context"])
+        elif collection == "sessions":
+            value["waiting"] = json.loads(value["waiting"])
+            value["context"] = json.loads(value["context"])
+        elif collection == "notifications":
+            value["payload"] = json.loads(value["payload"])
+        elif collection == "specialists":
+            value["inputs"] = json.loads(value["inputs"])
+            value["result"] = json.loads(value["result"]) if value["result"] else None
+            value["exit_verified"] = bool(value["exit_verified"])
+        elif collection == "knowledge":
+            entry = db.execute(
+                "SELECT kind,node_id FROM knowledge_entries WHERE knowledge_id=?",
+                (value["knowledge_id"],),
+            ).fetchone()
+            value.update(dict(entry))
+            for key in (
+                "scope",
+                "conditions",
+                "evidence_refs",
+                "source_identity",
+                "dependencies",
+                "supersedes",
+            ):
+                value[key] = json.loads(value[key])
+            value["ref"] = f"knowledge/{value['knowledge_id']}@{value['revision']}"
+        elif collection == "checkpoints":
+            value["state"] = json.loads(value["state"])
+            value["source_identity"] = json.loads(value["source_identity"])
+        expand_ref = {
+            "nodes": value.get("node_id"),
+            "attempts": value.get("attempt_id"),
+            "notes": value.get("note_id"),
+            "publications": f"pub/{value.get('publication_id')}",
+            "relations": value.get("relation_id"),
+            "legacy_refs": value.get("ref"),
+            "snapshots": value.get("snapshot_id"),
+            "restorations": value.get("restoration_id"),
+            "associations": value.get("association_id"),
+            "sessions": value.get("session_id"),
+            "tasks": value.get("task_id"),
+            "notifications": value.get("notification_id"),
+            "specialists": value.get("task_id"),
+            "knowledge": value.get("ref"),
+            "checkpoints": value.get("checkpoint_id"),
+            "review_todos": value.get("todo_id"),
+        }.get(collection) or f"{collection}/{cursor}"
+        if not full:
+            for key in ("body", "summary", "note", "statement", "prompt", "error"):
+                if isinstance(value.get(key), str):
+                    value[key] = _bounded_text(value[key], expand_ref)
+            for key in (
+                "content", "manifest", "details", "context", "payload", "inputs", "result",
+                "state", "scope", "conditions", "evidence_refs", "dependencies",
+            ):
+                if key in value and not isinstance(value[key], str):
+                    encoded = json.dumps(value[key], ensure_ascii=False, sort_keys=True)
+                    if len(encoded.encode("utf-8")) > 8192:
+                        value[key] = {
+                            "preview": encoded.encode("utf-8")[:8192].decode("utf-8", errors="ignore"),
+                            "truncated": True,
+                            "expand_ref": expand_ref,
+                        }
+        value["cursor"] = cursor
+        return value
+
+    def history_page(
+        self,
+        collection: str,
+        *,
+        after: int = 0,
+        upper_id: int | None = None,
+        limit: int = 50,
+        project_id: str | None = None,
+        order: str | None = None,
+    ) -> dict:
+        if collection not in COLLECTIONS:
+            raise ValidationError(f"Unsupported history collection: {collection}")
+        table, key = COLLECTIONS[collection]
+        after = max(0, int(after or 0))
+        limit = max(1, min(int(limit or 50), 200))
+        with self._read() as db:
+            actual_project = self._project(db)["project_id"]
+            if project_id is not None and project_id != actual_project:
+                raise ValidationError("Cursor belongs to another research project")
+            if order is not None and order != "rowid-asc":
+                raise ValidationError("Cursor order does not match this collection")
+            if upper_id is None:
+                upper_id = int(
+                    db.execute(f"SELECT COALESCE(MAX({key}),0) FROM {table}").fetchone()[0]
+                )
+            else:
+                upper_id = max(0, int(upper_id))
+            rows = list(
+                db.execute(
+                    f"SELECT {key} AS _cursor,* FROM {table} "
+                    f"WHERE {key}>? AND {key}<=? ORDER BY {key} LIMIT ?",
+                    (after, upper_id, limit + 1),
+                )
+            )
+            visible = rows[:limit]
+            items = [self._decode_page_row(db, collection, row) for row in visible]
+            next_after = int(visible[-1]["_cursor"]) if len(rows) > limit and visible else None
+            return {
+                "collection": collection,
+                "items": items,
+                "cursor": {
+                    "project_id": actual_project,
+                    "collection": collection,
+                    "after": next_after,
+                    "upper_id": upper_id,
+                    "order": "rowid-asc",
+                }
+                if next_after is not None
+                else None,
+                "upper_id": upper_id,
+                "has_more": len(rows) > limit,
+            }
+
+    def usage_page(self, *, after: int = 0, upper_id: int | None = None, limit: int = 50) -> dict:
+        after = max(0, int(after or 0))
+        limit = max(1, min(int(limit or 50), 200))
+        with self._read() as db:
+            if upper_id is None:
+                upper_id = int(
+                    db.execute("SELECT COALESCE(MAX(rowid),0) FROM usage_observations").fetchone()[0]
+                )
+            rows = list(
+                db.execute(
+                    "SELECT rowid AS _cursor,* FROM usage_observations "
+                    "WHERE rowid>? AND rowid<=? ORDER BY rowid LIMIT ?",
+                    (after, int(upper_id), limit + 1),
+                )
+            )
+            items = []
+            for row in rows[:limit]:
+                value = dict(row)
+                value["cursor"] = value.pop("_cursor")
+                value["details"] = json.loads(value["details"])
+                value["adjustments"] = [
+                    {**dict(item), "details": json.loads(item["details"])}
+                    for item in db.execute(
+                        "SELECT * FROM usage_adjustments WHERE observation_id=? "
+                        "ORDER BY rowid",
+                        (value["observation_id"],),
+                    )
+                ]
+                items.append(value)
+            next_after = items[-1]["cursor"] if len(rows) > limit and items else None
+            return {
+                "collection": "usage",
+                "items": items,
+                "cursor": {
+                    "project_id": self._project(db)["project_id"],
+                    "collection": "usage",
+                    "after": next_after,
+                    "upper_id": int(upper_id),
+                    "order": "rowid-asc",
+                }
+                if next_after is not None
+                else None,
+                "upper_id": int(upper_id),
+                "has_more": len(rows) > limit,
+            }
+
+    def changes_page(self, *, after: int = 0, limit: int = 50) -> dict:
+        after = max(0, int(after or 0))
+        limit = max(1, min(int(limit or 50), 200))
+        with self._read() as db:
+            rows = list(
+                db.execute(
+                    "SELECT * FROM events WHERE event_id>? ORDER BY event_id LIMIT ?",
+                    (after, limit + 1),
+                )
+            )
+            items = []
+            for row in rows[:limit]:
+                value = dict(row)
+                value["data"] = json.loads(value["data"])
+                items.append(value)
+            next_after = items[-1]["event_id"] if len(rows) > limit and items else None
+            return {
+                "collection": "changes",
+                "items": items,
+                "cursor": {"after": next_after, "order": "event-id-asc"}
+                if next_after is not None
+                else None,
+                "has_more": len(rows) > limit,
+            }
+
+    def reference_query(self, ref: str, *, full: bool = False) -> dict:
+        with self._read() as db:
+            if ref.startswith("knowledge/"):
+                kid, revision = parse_knowledge_ref(ref)
+                row = db.execute(
+                    "SELECT e.kind,e.node_id,r.* FROM knowledge_entries e "
+                    "JOIN knowledge_revisions r USING(knowledge_id) "
+                    "WHERE e.knowledge_id=? AND r.revision=?",
+                    (kid, revision),
+                ).fetchone()
+                if row:
+                    return {"kind": "knowledge", "value": self._decode_knowledge(row)}
+            node = db.execute("SELECT rowid AS _cursor,* FROM nodes WHERE node_id=?", (ref,)).fetchone()
+            if node:
+                return {"kind": "node", "value": self._decode_page_row(db, "nodes", node, full=full)}
+            if ref.startswith("pub/"):
+                publication_id, _, item_id = ref[4:].partition("#")
+                publication = db.execute(
+                    "SELECT rowid AS _cursor,* FROM publications WHERE publication_id=?",
+                    (publication_id,),
+                ).fetchone()
+                if publication:
+                    decoded = self._decode_page_row(db, "publications", publication, full=full)
+                    if item_id:
+                        item = next((value for value in decoded["items"] if value["item_id"] == item_id), None)
+                        if item:
+                            return {"kind": "publication-item", "value": item}
+                    else:
+                        return {"kind": "publication", "value": decoded}
+            note = db.execute("SELECT rowid AS _cursor,* FROM notes WHERE note_id=?", (ref,)).fetchone()
+            if note:
+                return {"kind": "note", "value": self._decode_page_row(db, "notes", note, full=full)}
+            snapshot = db.execute(
+                "SELECT rowid AS _cursor,* FROM snapshots WHERE snapshot_id=?", (ref,)
+            ).fetchone()
+            if snapshot:
+                return {"kind": "snapshot", "value": self._decode_page_row(db, "snapshots", snapshot, full=full)}
+            attempt = db.execute(
+                "SELECT rowid AS _cursor,* FROM attempts WHERE attempt_id=?", (ref,)
+            ).fetchone()
+            if attempt:
+                return {"kind": "attempt", "value": self._decode_page_row(db, "attempts", attempt, full=full)}
+            for kind, collection, column in (
+                ("relation", "relations", "relation_id"),
+                ("restoration", "restorations", "restoration_id"),
+                ("association", "associations", "association_id"),
+                ("session", "sessions", "session_id"),
+                ("exploration-task", "tasks", "task_id"),
+                ("notification", "notifications", "notification_id"),
+                ("specialist-task", "specialists", "task_id"),
+                ("checkpoint", "checkpoints", "checkpoint_id"),
+                ("review-todo", "review_todos", "todo_id"),
+            ):
+                table, _ = COLLECTIONS[collection]
+                row = db.execute(
+                    f"SELECT rowid AS _cursor,* FROM {table} WHERE {column}=? ORDER BY rowid DESC LIMIT 1",
+                    (ref,),
+                ).fetchone()
+                if row:
+                    return {"kind": kind, "value": self._decode_page_row(db, collection, row, full=full)}
+            legacy = db.execute("SELECT * FROM legacy_refs WHERE ref=?", (ref,)).fetchone()
+            if legacy:
+                value = dict(legacy)
+                value["item"] = json.loads(value["item"])
+                return {"kind": "legacy-ref", "value": value}
+        raise NotFoundError(f"Unknown research reference: {ref}")
+
+    def reference_chunk(self, ref: str, *, offset: int = 0, limit: int = 8192) -> dict:
+        """Expand one fixed reference without allowing an unbounded IPC response."""
+        offset = max(0, int(offset or 0))
+        limit = max(1, min(int(limit or 8192), 32768))
+        selected = self.reference_query(ref, full=True)
+        encoded = json.dumps(selected, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        chunk = base64.b64encode(encoded[offset : offset + limit]).decode("ascii")
+        next_offset = offset + limit if offset + limit < len(encoded) else None
+        return {
+            "ref": ref,
+            "encoding": "base64-json-utf8",
+            "offset": offset,
+            "chunk": chunk,
+            "next_offset": next_offset,
+            "total_bytes": len(encoded),
+        }
+
+    def control_state(self, host_id: str | None = None, session_id: str | None = None) -> dict:
+        with self._read() as db:
+            project = self._project(db)
+            association = attempt = owned_goal = None
+            if host_id and session_id:
+                association = db.execute(
+                    "SELECT * FROM associations WHERE host_id=? AND session_id=? "
+                    "AND ended_at IS NULL",
+                    (host_id, session_id),
+                ).fetchone()
+                if association:
+                    attempt = db.execute(
+                        "SELECT * FROM attempts WHERE association_id=? AND ended_at IS NULL",
+                        (association["association_id"],),
+                    ).fetchone()
+                    owned_goal = db.execute(
+                        "SELECT * FROM owned_goals WHERE association_id=?",
+                        (association["association_id"],),
+                    ).fetchone()
+            workflow = self.workflow_view(db, session_id)
+            workflow["sessions"] = [
+                value for value in workflow["sessions"] if not value["detached"]
+            ]
+            workflow["tasks"] = [
+                value
+                for value in workflow["tasks"]
+                if value["state"]
+                in {"queued", "starting", "running", "waiting", "stopping", "unverified"}
+            ]
+            waiting_ids = {
+                task_id for value in workflow["sessions"] for task_id in value["waiting"]
+            }
+            workflow["notifications"] = [
+                value
+                for value in workflow["notifications"]
+                if value["state"] == "pending"
+                or (value["state"] == "delivered" and value["task_id"] in waiting_ids)
+            ]
+            usage = db.execute(
+                "SELECT COALESCE(SUM(amount),0) known,"
+                "SUM(CASE WHEN amount IS NULL THEN 1 ELSE 0 END) unknown_count,"
+                "SUM(CASE WHEN completeness='estimated' THEN 1 ELSE 0 END) estimated_count "
+                "FROM usage_observations"
+            ).fetchone()
+            usage_value = {
+                "known": float(usage["known"]),
+                "unknown_count": int(usage["unknown_count"] or 0),
+                "estimated_count": int(usage["estimated_count"] or 0),
+            }
+            usage_value.update(self.workflow_usage(db))
+            specialists = [
+                self._decode_specialist(row)
+                for row in db.execute(
+                    "SELECT * FROM specialist_tasks WHERE state IN ('starting','running','unverified') "
+                    "ORDER BY created_at"
+                )
+            ]
+            return {
+                "schema_version": 4,
+                "project": project,
+                "association": dict(association) if association else None,
+                "attempt": {**dict(attempt), "details": json.loads(attempt["details"])}
+                if attempt
+                else None,
+                "owned_goal": dict(owned_goal) if owned_goal else None,
+                "workflow": workflow,
+                "usage": usage_value,
+                "specialists": specialists,
+                "counts": {
+                    collection: int(db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+                    for collection, (table, _) in COLLECTIONS.items()
+                },
+                "pagination": {
+                    "default_limit": 50,
+                    "maximum_limit": 200,
+                    "collections": list(COLLECTIONS) + ["usage", "changes"],
+                },
+            }

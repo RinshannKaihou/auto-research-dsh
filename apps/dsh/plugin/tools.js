@@ -35,10 +35,37 @@ export function registerResearchTools(ctx, domain) {
       invoke: (args, exec, id) => domain.wait(exec.agent, args.task_ids, id),
     }),
     tool(domain, {
+      name: 'research_delegate',
+      description: 'Start one bounded native specialist in the current node. It receives fixed research context, reads the ledger, and cannot write research records or delegate recursively.',
+      timeoutMs: 600000,
+      isConcurrencySafe: () => false,
+      parameters: {
+        label: { type: 'string', required: true },
+        question: { type: 'string', required: true },
+        purpose: { type: 'string', required: true },
+        inputs: { type: 'array', items: { type: 'string' } },
+        tool_scope: { type: 'array', items: { type: 'string' } },
+        node_id: { type: 'string' },
+        deliverable: { type: 'string', required: true },
+        completion_criteria: { type: 'string', required: true },
+        report_requirements: { type: 'string', required: true },
+      },
+      invoke: (args, exec, id) => domain.delegate(exec.agent, {
+        ...args,
+        prompt: `Question: ${args.question}\nPurpose: ${args.purpose}\nFixed inputs: ${JSON.stringify(args.inputs ?? [])}\nDeliverable: ${args.deliverable}\nCompletion criteria: ${args.completion_criteria}\nReport requirements: ${args.report_requirements}\nPreserve uncertainty and return an explicit incomplete result when evidence is insufficient.`,
+      }, exec, id, 'domain'),
+    }),
+    tool(domain, {
       name: 'research_query',
       method: 'query',
-      description: 'Read the associated research project, nodes, immutable publications, relations, work segments, snapshots, and usage.',
-      parameters: { ref: { type: 'string' } },
+      description: 'Read a bounded research summary, retrieve a fixed reference, search knowledge, or page a collection. Use the returned cursor to continue.',
+      parameters: {
+        ref: { type: 'string' }, query: { type: 'string' }, collection: { type: 'string' },
+        node_id: { type: 'string' }, kind: { type: 'string' }, after: { type: 'number' },
+        status: { type: 'string' }, revision: { type: 'number' },
+        conditions: { type: 'object', additionalProperties: true, properties: {} },
+        upper_id: { type: 'number' }, offset: { type: 'number' }, limit: { type: 'number' },
+      },
       map: args => args,
     }),
     tool(domain, {
@@ -53,14 +80,57 @@ export function registerResearchTools(ctx, domain) {
         purpose: { type: 'string' },
         strategy: { type: 'string', enum: ['continue', 'redirect', 'anchor'] },
         anchor_ref: { type: 'string' },
+        question_ref: { type: 'string' },
         dispatch: { type: 'boolean' },
       },
       map: args => ({ ...args, dispatch: undefined }),
       async after(node, args, exec, id) {
         if (!args.dispatch) return node;
-        const state = await domain.request(exec.agent, 'query');
+        const state = await domain.state(exec.agent);
         if (state.project.control !== 'auto') return { node, dispatched: false };
         return { node, dispatched: true, branch: await domain.dispatch(exec.agent, node.node_id, `${id}:dispatch`) };
+      },
+    }),
+    tool(domain, {
+      name: 'research_memory',
+      description: 'Record or revise sourced knowledge, checkpoint the current node, or run consolidation. In manual mode consolidate only when the user explicitly asks. Claims, observations, and lessons require evidence_refs.',
+      parameters: {
+        action: { type: 'string', required: true, enum: ['record', 'revise', 'checkpoint', 'consolidate'] },
+        kind: { type: 'string', enum: ['observation', 'hypothesis', 'lesson', 'decision', 'open_question', 'claim'] },
+        statement: { type: 'string' }, node_id: { type: 'string' }, status: { type: 'string' },
+        scope: { type: 'object', additionalProperties: true, properties: {} },
+        conditions: { type: 'object', additionalProperties: true, properties: {} },
+        evidence_refs: { type: 'array', items: { type: 'string' } },
+        dependencies: { type: 'array', items: { type: 'string' } },
+        ref: { type: 'string' }, expected_revision: { type: 'number' }, reason: { type: 'string' },
+        changes: { type: 'object', additionalProperties: true, properties: {} },
+        state: { type: 'object', additionalProperties: true, properties: {} },
+      },
+      async invoke(args, exec, id) {
+        const fields = Object.fromEntries(Object.entries(args).filter(([key, value]) => key !== 'action' && value !== undefined));
+        if (args.action !== 'consolidate') {
+          return domain.request(exec.agent, 'memory_write', { action: args.action, fields, model_call: true }, id);
+        }
+        const state = await domain.state(exec.agent);
+        if (!['main','exploration'].includes(state.workflow.session?.role)) throw new Error('This session cannot start a consolidation reviewer');
+        const nodeId = args.node_id ?? state.attempt?.node_id ?? state.workflow.session?.node_id;
+        const todo = await domain.request(exec.agent, 'review_todo_next', { node_id: nodeId });
+        if (todo) await domain.request(exec.agent, 'review_todo_state', { todo_id: todo.todo_id, state: 'running' }, `${id}:todo-running`);
+        const inputs = [...new Set([...(args.evidence_refs ?? []), ...(todo ? [todo.trigger_ref] : [])])];
+        let review;
+        try {
+          review = await domain.delegate(exec.agent, {
+            label: '整理与复核', node_id: nodeId, inputs,
+            prompt: `Review node ${nodeId ?? 'project planning'}. Fixed sources: ${JSON.stringify(inputs)}. Find relevant early negative results and conditions; identify conflicts; return proposed revisions with exact sources, reasons, and uncovered scope. Do not write research records.`,
+          }, exec, id, 'review');
+        } catch (error) {
+          if (todo) await domain.request(exec.agent, 'review_todo_state', { todo_id: todo.todo_id, state: 'pending' }, `${id}:todo-pending`);
+          throw error;
+        }
+        if (todo) await domain.request(exec.agent, 'review_todo_state', {
+          todo_id: todo.todo_id, state: review.state === 'completed' ? 'completed' : 'pending',
+        }, `${id}:todo-${review.state === 'completed' ? 'completed' : 'pending'}`);
+        return { todo, review };
       },
     }),
     tool(domain, {
@@ -100,11 +170,13 @@ export function registerResearchTools(ctx, domain) {
               kind: { type: 'string' },
               content: { type: 'object', additionalProperties: true, properties: {} },
               source_path: { type: 'string' },
+              knowledge_refs: { type: 'array', items: { type: 'string' } },
             },
           },
         },
+        knowledge_refs: { type: 'array', items: { type: 'string' } },
       },
-      map: args => ({ ...args, gaps: args.gaps ?? [], items: args.items ?? [] }),
+      map: args => ({ ...args, gaps: args.gaps ?? [], items: args.items ?? [], knowledge_refs: args.knowledge_refs ?? [] }),
     }),
     tool(domain, {
       name: 'research_relate',

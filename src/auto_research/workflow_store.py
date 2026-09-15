@@ -206,7 +206,7 @@ class WorkflowStore:
                     "role",
                     "main" if not view["run"] or not view["run"]["main_session_id"] else "legacy",
                 )
-                if role not in {"main", "exploration", "discussion", "handoff", "legacy"}:
+                if role not in {"main", "exploration", "discussion", "handoff", "specialist", "legacy"}:
                     raise ValidationError("Invalid session role")
                 if current:
                     db.execute(

@@ -19,6 +19,7 @@ export function registerResearchEvents(ctx, domain) {
   const memory = new Map(), queues = new Map(), disposers = [], humans = new Set(), replayed = new Set();
   let disposed = false, timer;
   domain.clearMemory = id => memory.delete(id);
+  domain.contextCache = memory;
   const contain = (agent, promise) => promise.catch(error => {
     if (!/disconnected|unavailable|channel closed/i.test(error.message)) return;
     domain.faults.set(agent.id, 'storage: 研究状态存储不可用');
@@ -47,8 +48,52 @@ export function registerResearchEvents(ctx, domain) {
     queue.events.push({ event_type: event.type, sequence, facts: eventFacts(event) });
     if (!timer) timer = setTimeout(flush,50);
   }
-  disposers.push(ctx.systemPrompt.context({ name: 'research:memory', order: 800,
-    text: ({agent}) => memory.get(String(agent?.id)) ?? '' }));
+  async function assembledMemory(agent, purpose) {
+    if (!agent?.id) return '';
+    const timeoutMs = domain.memoryReadTimeoutMs ?? 2000;
+    let timer;
+    try {
+      const view = await Promise.race([
+        domain.request(agent, 'memory_context', { max_chars: 12000 }),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('research memory timeout')), timeoutMs); }),
+      ]);
+      clearTimeout(timer);
+      const text = `Research context:\n${view.text}`;
+      memory.set(agent.id, { text, sourceDigest: view.source_digest, stale: false });
+      void domain.request(agent, 'context_record', { fields: {
+        body: view.text, source_sequence: view.source_sequence,
+        turn: domain.turns.get(agent.id), step: domain.steps?.get(agent.id), purpose,
+        policy_version: 'memory-v2', dependencies: view.dependencies ?? [], selection: { source_digest: view.source_digest, omitted: view.omitted ?? [] },
+      } }, `${agent.id}:context:${randomUUID()}`).catch(() => {});
+      return text;
+    } catch (error) {
+      clearTimeout(timer);
+      const saved = memory.get(agent.id);
+      if (saved) {
+        if (!saved.stale) memory.set(agent.id, { ...saved, stale: true,
+          text: `${saved.text}\n\n[Research memory is stale: storage did not answer in time.]` });
+        return memory.get(agent.id).text;
+      }
+      if (/not associated|not currently attached/i.test(error instanceof Error ? error.message : String(error))) return '';
+      return domain.associatedSessions?.has(agent.id)
+        ? 'Research context unavailable for this associated session. Continue manual conversation; autonomous continuation is blocked until storage recovers.'
+        : '';
+    }
+  }
+  disposers.push(ctx.on('system-prompt/assemble', async (_assembly, context, next) => {
+    const assembled = await next();
+    const agent = context?.agent;
+    if (!agent?.id) return assembled;
+    const purpose = context?.purpose ?? context?.request?.purpose ?? context?.signal?.purpose;
+    if (typeof purpose === 'string' && /title|compress|compact/i.test(purpose)) return assembled;
+    await domain.ensureSpecialist(agent);
+    const text = await assembledMemory(agent, purpose);
+    if (!text) return assembled;
+    return { ...assembled, contexts: [
+      ...assembled.contexts.filter(item => item.name !== 'research:memory'),
+      { name: 'research:memory', text },
+    ] };
+  }, { global: true }));
   disposers.push(ctx.on('agent/pre-step', async ({agent,turn,step}, next) => {
     domain.turns.set(agent.id,turn);
     domain.steps ??= new Map(); domain.steps.set(agent.id,step);
@@ -70,8 +115,6 @@ export function registerResearchEvents(ctx, domain) {
       if (!human && goal?.phase === 'active' && (state.workflow.run.state !== 'running' || row.pause_reason)) {
         ctx.goals.pause(agent,{id:goal.id,revision:goal.revision});
       }
-      const view = await domain.request(agent,'memory',{max_chars:12000});
-      memory.set(agent.id,`Research context (role: ${row?.role ?? 'legacy'}):\n${view.text}`);
     } catch (error) {
       memory.delete(agent.id);
       await contain(agent,Promise.reject(error));
@@ -104,7 +147,10 @@ export function registerResearchEvents(ctx, domain) {
     void contain(agent,domain.idle(agent));
   }));
   disposers.push(ctx.on('agent/error', ({agent,error}) => {
-    void contain(agent,domain.pauseSession(agent,'fault').then(() => domain.progress(agent,'failed',{summary:String(error)},`fault:${randomUUID()}`)));
+    void contain(agent,domain.state(agent).then(state => {
+      if (state.workflow.session?.role === 'specialist') return undefined;
+      return domain.pauseSession(agent,'fault').then(() => domain.progress(agent,'failed',{summary:String(error)},`fault:${randomUUID()}`));
+    }));
   }));
   disposers.push(ctx.on('goal/changed', ({agent,change}) => {
     if (!change.goal || domain.lastOwnedGoal.get(agent.id) !== change.goal.id) return;

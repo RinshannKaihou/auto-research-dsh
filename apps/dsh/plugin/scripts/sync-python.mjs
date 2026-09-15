@@ -12,7 +12,10 @@ for (const file of [
   'artifacts.py',
   'errors.py',
   'migration.py',
+  'maintenance_cli.py',
+  'memory_store.py',
   'native_store.py',
+  'query_store.py',
   'workflow_store.py',
   'service.py',
 ]) {
