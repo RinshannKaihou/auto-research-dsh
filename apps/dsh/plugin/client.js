@@ -1,129 +1,322 @@
-/* Native DSH research workbench. Model selection and chat remain on DSH surfaces. */
-window.__ModuleLoader__.load({
-  id: 'auto-research-v5',
-  factory: require => {
-    const React = require('react');
-    const h = React.createElement;
-    let rpc;
-    let openSession;
-    const box = { border: '1px solid var(--border-color, #ccc)', borderRadius: 8, padding: 12, marginBottom: 12 };
-    const button = (label, action, disabled = false) => h('button', {
-      onClick: action,
-      disabled,
-      style: { padding: '5px 10px', marginRight: 6, marginBottom: 6 },
-    }, label);
-
-    function Workbench({ sessionId }) {
-      const [state, setState] = React.useState(null);
-      const [error, setError] = React.useState(null);
-      const [notice, setNotice] = React.useState(null);
-      const [goal, setGoal] = React.useState('');
-      const [branchNode, setBranchNode] = React.useState('');
-
-      const call = React.useCallback(async (endpoint, payload = {}) => {
-        const response = await rpc(endpoint, {
-          sessionId,
-          operationId: `${sessionId}:ui:${crypto.randomUUID()}`,
-          ...payload,
-        });
-        if (!response.ok) throw new Error(response.error.message);
-        return response.value;
-      }, [sessionId]);
-
-      const refresh = React.useCallback(async () => {
-        try {
-          setState(await call('query'));
-          setError(null);
-        } catch (failure) {
-          setState(null);
-          setError(failure.message);
-        }
-      }, [call]);
-
-      React.useEffect(() => {
-        let active = true;
-        let timer;
-        const poll = async () => {
-          if (active) await refresh();
-          if (active) timer = setTimeout(poll, 3000);
-        };
-        poll();
-        return () => { active = false; clearTimeout(timer); };
-      }, [refresh]);
-
-      async function act(endpoint, payload) {
-        try {
-          const value = await call(endpoint, payload);
-          setError(null);
-          setNotice(null);
-          await refresh();
-          if (value?.sessionId) setNotice(`已创建原生会话 ${value.sessionId}`);
-        } catch (failure) {
-          setNotice(null);
-          setError(failure.message);
-        }
-      }
-
-      return h('div', {
-        className: 'ari-v5',
-        style: { padding: '16px 16px 200px', height: '100%', overflow: 'auto', color: 'inherit', fontSize: 14 },
-      },
-      h('style', null, '.ari-v5 h2{margin:0 0 8px;font-size:22px}.ari-v5 h3{margin:0 0 8px;font-size:16px}.ari-v5 p{margin:6px 0;line-height:1.5}.ari-v5 td,.ari-v5 th{padding:4px 6px}.ari-v5 input{padding:6px;margin:4px 6px 8px 0}'),
-      h('h2', null, '研究工作台'),
-      h('p', null, '当前 DSH 会话继续负责模型、原生工具、权限、轨迹、取消与 goal 续轮。'),
-      error && h('p', { role: 'alert', style: { color: '#b74b35' } }, error),
-      notice && h('p', { role: 'status', style: { color: '#2f7d4a' } }, notice),
-      !state ? h('section', { style: box },
-        h('h3', null, '关联当前会话'),
-        h('input', { value: goal, onChange: event => setGoal(event.target.value), placeholder: '研究目标' }),
-        button('新建并关联', () => act('open', { goal }), !goal.trim()),
-        button('关联已有项目', () => act('open', {}))) : h(React.Fragment, null,
-        h('section', { style: box }, h('h3', null, state.project.goal),
-          h('p', null, `控制：${state.project.control} · 当前工作段：${state.attempt?.attempt_id ?? '无'}`),
-          h('p', null, `已记录用量 ${state.usage.known} token；缺失请求 ${state.usage.unknown_count}`),
-          button('开启自主研究', () => act('auto')),
-          button('暂停', () => act('pause')),
-          button('继续', () => act('resume')),
-          button('停止项目', () => act('stop')),
-          button('解除当前会话关联', () => act('detach'))),
-        h('section', { style: box }, h('h3', null, `研究图 · ${state.nodes.length}`),
-          state.nodes.length ? h('ul', null, ...state.nodes.map(node => h('li', { key: node.node_id },
-            h('span', null, `${node.node_id} · ${node.status} · ${node.strategy ?? 'continue'} · ${node.question} `),
-            button('聚焦', () => act('focus', { nodeId: node.node_id }), node.status === 'closed'),
-            button('分支', () => act('branch', { nodeId: node.node_id }), node.status === 'closed')))) : h('p', null, '模型可用 research_propose 提出节点。'),
-          h('input', { value: branchNode, onChange: event => setBranchNode(event.target.value), placeholder: '节点 ID' }),
-          button('聚焦规划工作', () => act('focus', { nodeId: null })),
-          button('创建独立工作区分支', () => act('branch', { nodeId: branchNode }), !branchNode)),
-        h('section', { style: box }, h('h3', null, `阶段材料 · ${state.publications.length}`),
-          ...state.publications.map(publication => h('div', { key: publication.publication_id },
-            h('strong', null, `${publication.publication_id} · ${publication.status}`),
-            h('p', null, publication.summary),
-            h('p', null, publication.items.map(item => item.ref).join(' · '))))),
-        h('section', { style: box }, h('h3', null, `接手快照 · ${state.snapshots.length}`),
-          state.snapshots.length ? state.snapshots.map(snapshot => h('div', { key: snapshot.snapshot_id },
-            h('span', null, `${snapshot.snapshot_id} · ${snapshot.complete ? '完整' : '部分'} · ${snapshot.attempt_id} `),
-            button('创建接手副本', () => act('restore', { snapshotId: snapshot.snapshot_id })))) : h('p', null, '模型可用 research_snapshot 保存可接手文件。')),
-        h('section', { style: box }, h('h3', null, '关联的原生会话'),
-          ...state.associations.filter(item => item.ended_at === null).map(item => h('div', { key: item.association_id },
-            h('code', null, item.session_id), ' ',
-            button('在 DSH 打开', () => openSession(item.session_id))))),
-        h('section', { style: box }, h('h3', null, `全部工作段 · ${state.attempts.length}`),
-          h('table', { style: { width: '100%', textAlign: 'left' } },
-            h('thead', null, h('tr', null, ...['工作段', '节点', '模式', '状态'].map(label => h('th', { key: label }, label)))),
-            h('tbody', null, ...state.attempts.map(attempt => h('tr', { key: attempt.attempt_id },
-              h('td', null, attempt.attempt_id), h('td', null, attempt.node_id ?? '规划'),
-              h('td', null, attempt.mode), h('td', null, attempt.state))))))));
+/* Generated by scripts/build-client.mjs; edit frontend/ sources. */
+window.__ModuleLoader__.load({id:'auto-research-v5',factory:require=>{
+const React=require('react');
+/** Project graph projection. No inferred scientific or execution relationships. */
+function projectGraph(state) {
+  const ordered = [...(state.nodes ?? [])].sort((a,b) => `${a.created_at ?? ''}:${a.node_id}`.localeCompare(`${b.created_at ?? ''}:${b.node_id}`));
+  const nodes = new Map(ordered.map(n => [n.node_id, {...n, attempts:[], publications:[], snapshots:[], notes:[], references:[], relations:[]} ]));
+  const attempts = new Map((state.attempts ?? []).map(a => [a.attempt_id,a]));
+  const pubs = new Map((state.publications ?? []).map(p => [p.publication_id,p]));
+  const snapshots = new Map((state.snapshots ?? []).map(s => [s.snapshot_id,s]));
+  const legacy = new Map((state.legacy_refs ?? []).map(r => [r.ref,r]));
+  const owner = record => {
+    // A declared but missing node must not be silently assigned elsewhere.
+    const id = record?.node_id ?? attempts.get(record?.attempt_id)?.node_id;
+    return nodes.has(id) ? id : null;
+  };
+  function resolve(ref) {
+    if (typeof ref !== 'string') return null;
+    if (nodes.has(ref)) return ref;
+    if (legacy.has(ref)) return owner(legacy.get(ref));
+    if (attempts.has(ref)) return owner(attempts.get(ref));
+    if (snapshots.has(ref)) return owner(snapshots.get(ref));
+    if (ref.startsWith('pub/')) {
+      const [id,itemId] = ref.slice(4).split('#');
+      const p = pubs.get(id);
+      if (!p || (itemId !== undefined && !(p.items ?? []).some(i => i.item_id === itemId))) return null;
+      return owner(p);
     }
+    return null;
+  }
+  const planning = {attempts:[],publications:[],snapshots:[],notes:[],references:[],relations:[]};
+  for (const key of ['attempts','publications','snapshots','notes']) {
+    for (const record of state[key] ?? []) (nodes.get(owner(record)) ?? planning)[key].push(record);
+  }
+  const edges = new Map();
+  function link(source,target,record) {
+    if (!source || !target || source === target) return;
+    const id = `${source}→${target}`;
+    if (!edges.has(id)) edges.set(id,{id,source,target,records:[]});
+    edges.get(id).records.push(record);
+  }
+  for (const n of nodes.values()) {
+    for (const [kind,refs] of [['input',n.inputs ?? []],['anchor',n.anchor_ref ? [n.anchor_ref] : []]]) {
+      for (const ref of refs) {
+        const source = resolve(ref);
+        const record = {kind,source_ref:ref,target_ref:n.node_id,label:kind === 'anchor' ? '历史锚点' : '固定输入',source,target:n.node_id};
+        n.references.push(record);
+        link(source,n.node_id,record);
+      }
+    }
+  }
+  for (const r of state.relations ?? []) {
+    const source = resolve(r.source_ref), target = resolve(r.target_ref);
+    const record = {...r,kind:'relation',source,target};
+    for (const id of new Set([source,target])) if (id) nodes.get(id).relations.push(record);
+    if (!source || !target) planning.relations.push(record);
+    link(source,target,record);
+  }
+  const edgeList = [...edges.values()].sort((a,b) => a.id.localeCompare(b.id));
+  return {nodes:[...nodes.values()],edges:edgeList,planning,resolve,
+    structuralKey:JSON.stringify([ordered.map(n => [n.node_id,n.created_at]),edgeList.map(e => [e.source,e.target])])};
+}
 
-    return {
-      inject: ['slots', 'connection', 'sessions'],
-      apply(ctx) {
-        rpc = (endpoint, payload) => ctx.connection.rpc.call('/research-v5', endpoint, payload);
-        openSession = id => ctx.sessions.open(id);
-        ctx.slots.inject('conversation.view', () => ctx.slots.register({
-          name: 'conversation.view', id: 'research-v5', order: 51, label: 'Research',
-        }, Workbench));
-      },
-    };
-  },
-});
+const CARD = {width:260,height:128,gapX:100,gapY:36};
+/** SCC condensation gives stable ranks without requiring a DAG of research. */
+function layoutGraph(nodes, edges) {
+  const ids = nodes.map(n => n.node_id), order = new Map(ids.map((id,i) => [id,i]));
+  const adjacency = new Map(ids.map(id => [id,[]]));
+  for (const e of edges) if (adjacency.has(e.source) && adjacency.has(e.target)) adjacency.get(e.source).push(e.target);
+  const index = new Map(), low = new Map(), stack = [], onStack = new Set(), groups = [];
+  let sequence = 0;
+  function visit(id) {
+    index.set(id,sequence); low.set(id,sequence++); stack.push(id); onStack.add(id);
+    for (const next of adjacency.get(id)) {
+      if (!index.has(next)) { visit(next); low.set(id,Math.min(low.get(id),low.get(next))); }
+      else if (onStack.has(next)) low.set(id,Math.min(low.get(id),index.get(next)));
+    }
+    if (low.get(id) === index.get(id)) {
+      const group = []; let next;
+      do { next=stack.pop(); onStack.delete(next); group.push(next); } while (next !== id);
+      group.sort((a,b) => order.get(a)-order.get(b)); groups.push(group);
+    }
+  }
+  ids.forEach(id => { if (!index.has(id)) visit(id); });
+  groups.sort((a,b) => order.get(a[0])-order.get(b[0]));
+  const groupOf = new Map(groups.flatMap((g,i) => g.map(id => [id,i])));
+  const nexts = groups.map(() => new Set()), indegree=groups.map(() => 0), rank=groups.map(() => 0), connected=new Set();
+  for (const e of edges) {
+    const a=groupOf.get(e.source),b=groupOf.get(e.target);
+    if (a === undefined || b === undefined) continue;
+    connected.add(e.source); connected.add(e.target);
+    if (a !== b && !nexts[a].has(b)) { nexts[a].add(b); indegree[b]++; }
+  }
+  const queue=groups.map((_,i)=>i).filter(i=>!indegree[i]);
+  while(queue.length) {
+    const i=queue.shift();
+    for(const j of nexts[i]) { rank[j]=Math.max(rank[j],rank[i]+1); if(--indegree[j]===0) queue.push(j); }
+  }
+  const positions = new Map(), rows=new Map();
+  groups.forEach((g,i) => {
+    if (g.every(id=>!connected.has(id))) return;
+    for(const id of g) { const row=rows.get(rank[i]) ?? 0; positions.set(id,{x:32+rank[i]*360,y:48+row*164}); rows.set(rank[i],row+1); }
+  });
+  const isolated=ids.filter(id=>!connected.has(id));
+  const isolatedY=rows.size ? 110+Math.max(...rows.values())*164 : 48;
+  isolated.forEach((id,i)=>positions.set(id,{x:32+(i%3)*360,y:isolatedY+Math.floor(i/3)*164}));
+  const all=[...positions.values()];
+  return {positions,isolatedY:isolated.length ? isolatedY : null,width:Math.max(600,...all.map(p=>p.x+292)),height:Math.max(320,...all.map(p=>p.y+170))};
+}
+function inViewport(p, camera, size, margin=100) {
+  return (p.x+CARD.width)*camera.k+camera.x>=-margin && p.x*camera.k+camera.x<=size.width+margin &&
+    (p.y+CARD.height)*camera.k+camera.y>=-margin && p.y*camera.k+camera.y<=size.height+margin;
+}
+function clampZoom(k) { return Math.max(0.12,Math.min(2.5,k)); }
+
+function createResearchGraph(React, layoutGraph, inViewport, clampZoom) {
+  const h=React.createElement;
+  return function ResearchGraph({model,visibleIds,selected,onSelect,onEdge,focused}) {
+    const root=React.useRef(null), drag=React.useRef(null), moved=React.useRef(false), fitted=React.useRef(false);
+    const [size,setSize]=React.useState({width:0,height:560});
+    const [camera,setCamera]=React.useState({x:24,y:24,k:1});
+    const layout=React.useMemo(()=>layoutGraph(model.nodes,model.edges),[model.structuralKey]);
+    const marker=React.useId().replace(/:/g,'');
+    React.useEffect(()=>{
+      const observer=new ResizeObserver(entries=>{ const r=entries[0].contentRect; if(r.width) setSize({width:r.width,height:r.height}); });
+      if(root.current) observer.observe(root.current);
+      return ()=>observer.disconnect();
+    },[]);
+    function fit() {
+      const points=model.nodes.filter(n=>visibleIds.has(n.node_id)).map(n=>layout.positions.get(n.node_id));
+      if(!points.length) return;
+      const x=Math.min(...points.map(p=>p.x))-115,y=Math.min(...points.map(p=>p.y))-40;
+      const w=Math.max(...points.map(p=>p.x+260))-x+115,hh=Math.max(...points.map(p=>p.y+128))-y+28;
+      const k=clampZoom(Math.min(1.2,size.width/w,size.height/hh));
+      setCamera({x:(size.width-w*k)/2-x*k,y:(size.height-hh*k)/2-y*k,k});
+    }
+    React.useEffect(()=>{ if(!fitted.current && model.nodes.length && size.width) { fit(); fitted.current=true; } },[model.structuralKey,size]);
+    function zoom(factor) { setCamera(c=>{const k=clampZoom(c.k*factor),f=k/c.k;return {k,x:size.width/2-(size.width/2-c.x)*f,y:size.height/2-(size.height/2-c.y)*f};}); }
+    function reveal(id) {
+      const p=layout.positions.get(id);
+      if(!inViewport(p,camera,size,0)) setCamera(c=>({...c,x:size.width/2-(p.x+130)*c.k,y:size.height/2-(p.y+64)*c.k}));
+    }
+    function select(id) { if(!moved.current) onSelect(id); }
+    const nodes=model.nodes.filter(n=>visibleIds.has(n.node_id));
+    const visible=nodes.filter(n=>inViewport(layout.positions.get(n.node_id),camera,size) || n.node_id===selected);
+    const rendered=new Set(visible.map(n=>n.node_id));
+    function key(event,id) {
+      if(event.key==='Enter' || event.key===' ') {event.preventDefault();onSelect(id);return;}
+      if(!['ArrowRight','ArrowLeft','ArrowDown','ArrowUp','Home','End'].includes(event.key)) return;
+      event.preventDefault(); const i=nodes.findIndex(n=>n.node_id===id),delta=['ArrowLeft','ArrowUp'].includes(event.key)?-1:1;
+      const next=nodes[event.key==='Home'?0:event.key==='End'?nodes.length-1:(i+delta+nodes.length)%nodes.length];
+      if(next) {onSelect(next.node_id);reveal(next.node_id);requestAnimationFrame(()=>root.current?.querySelector(`[data-node-id="${CSS.escape(next.node_id)}"]`)?.focus());}
+    }
+    const curves=model.edges.filter(e=>visibleIds.has(e.source)&&visibleIds.has(e.target)).map(e=>{
+      const a=layout.positions.get(e.source),b=layout.positions.get(e.target);
+      // Keep an edge crossing the viewport even if both endpoints were culled.
+      const minX=Math.min(a.x,b.x)-100,maxX=Math.max(a.x,b.x)+360,minY=Math.min(a.y,b.y)-180,maxY=Math.max(a.y,b.y)+180;
+      if(maxX*camera.k+camera.x<0||minX*camera.k+camera.x>size.width||maxY*camera.k+camera.y<0||minY*camera.k+camera.y>size.height)return null;
+      const forward=b.x>a.x, x1=a.x+(forward?260:0),x2=b.x+(forward?0:260),y1=a.y+64,y2=b.y+64;
+      const sameColumn=a.x===b.x, side=b.y>a.y?1:-1, sx=a.x+(side>0?260:0), bend=sx+side*100;
+      const d=sameColumn?`M${sx},${y1} C${bend},${y1} ${bend},${y2} ${sx},${y2}`:forward?`M${x1},${y1} C${x1+65},${y1} ${x2-65},${y2} ${x2},${y2}`:`M${x1},${y1} C${x1-80},${y1-130} ${x2+80},${y2-130} ${x2},${y2}`;
+      const kind=e.records.some(r=>r.kind==='relation')?'relation':e.records.some(r=>r.kind==='anchor')?'anchor':'input';
+      const label=e.records.length>1?`${e.records[0].label} +${e.records.length-1}`:e.records[0].label;
+      return h('g',{key:e.id,className:`ari-edge ari-${kind}`,role:'button',tabIndex:0,'aria-label':`${e.source} → ${e.target}: ${label}`,onClick:()=>onEdge(e),onKeyDown:event=>{if(['Enter',' '].includes(event.key)){event.preventDefault();onEdge(e);}}},
+        h('title',null,e.records.map(r=>`${r.source_ref} → ${r.target_ref}: ${r.label}`).join('\n')),
+        h('path',{d,className:'ari-edge-hit'}),h('path',{d,markerEnd:`url(#${marker}-${kind})`}),
+        h('text',{x:sameColumn?sx+side*78:(x1+x2)/2,y:(y1+y2)/2-(sameColumn?8:forward?10:96),textAnchor:sameColumn?(side>0?'start':'end'):'middle'},label.length>24?label.slice(0,23)+'…':label));
+    });
+    return h('div',{className:'ari-graph-shell'},
+      h('div',{className:'ari-graph-tools'},h('span',null,'实线：关系 · 虚线：输入 · 点线：锚点'),
+        h('button',{onClick:()=>zoom(1/1.25),'aria-label':'缩小研究图'},'−'),h('span',{'aria-live':'polite'},`${Math.round(camera.k*100)}%`),
+        h('button',{onClick:()=>zoom(1.25),'aria-label':'放大研究图'},'+'),h('button',{onClick:fit},'适应全部')),
+      h('div',{ref:root,className:'ari-canvas',onPointerDown:e=>{moved.current=false;if(e.button!==0 || e.target.closest('[role="button"]'))return;moved.current=false;drag.current={x:e.clientX,y:e.clientY,camera};e.currentTarget.setPointerCapture(e.pointerId);},
+        onPointerMove:e=>{if(!drag.current)return;const dx=e.clientX-drag.current.x,dy=e.clientY-drag.current.y;moved.current=Math.abs(dx)+Math.abs(dy)>3;setCamera({...drag.current.camera,x:drag.current.camera.x+dx,y:drag.current.camera.y+dy});},
+        onPointerUp:()=>{drag.current=null;},onPointerCancel:()=>{drag.current=null;},
+        onWheel:e=>{if(e.ctrlKey||e.metaKey){e.preventDefault();zoom(e.deltaY>0?1/1.1:1.1);}}},
+        h('svg',{width:'100%',height:'100%',role:'group','aria-label':'研究节点图。使用方向键浏览节点，回车查看详情。'},
+          h('defs',null,...['relation','input','anchor'].map(kind=>h('marker',{key:kind,id:`${marker}-${kind}`,viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:7,markerHeight:7,orient:'auto'},h('path',{d:'M 0 0 L 10 5 L 0 10 z',fill:kind==='anchor'?'#b77a33':'#7c8c97'})))),
+          h('g',{transform:`translate(${camera.x} ${camera.y}) scale(${camera.k})`},...curves,
+            ...visible.map(n=>{const p=layout.positions.get(n.node_id);return h('g',{key:n.node_id,transform:`translate(${p.x} ${p.y})`,className:`ari-node ${n.status==='closed'?'ari-closed':''} ${selected===n.node_id?'ari-selected':''} ${focused===n.node_id?'ari-focused':''}`,
+              role:'button',tabIndex:0,'data-status':n.status,'data-node-id':n.node_id,'aria-label':`${n.node_id} ${n.status} ${n.question}`,'aria-pressed':selected===n.node_id,
+              onClick:()=>select(n.node_id),onKeyDown:e=>key(e,n.node_id)},
+              h('title',null,n.question),h('rect',{width:260,height:128,rx:10}),
+              h('text',{x:16,y:25,className:'ari-node-id'},n.node_id),h('text',{x:244,y:25,textAnchor:'end',className:'ari-node-status'},`${n.status}${focused===n.node_id?' · 当前':''}`),
+              h('foreignObject',{x:16,y:37,width:228,height:49},h('div',{className:'ari-node-question'},n.question)),
+              h('text',{x:16,y:110,className:'ari-node-meta'},`${n.strategy ?? 'continue'} · ${n.attempts.length} 工作段 · ${n.publications.length} 发布`));}))),
+        !nodes.length&&h('p',{className:'ari-empty'},model.nodes.length?'没有匹配的节点；清除筛选后查看。':'尚无研究节点。规划工作和材料可在下方查看。')),
+      h('span',{className:'ari-sr-only'},`共 ${nodes.length} 个节点，可视区域 ${rendered.size} 个。也可切换列表访问所有节点。`));
+  };
+}
+
+function createResearchDetails(React) {
+  const h=React.createElement;
+  const json=value=>typeof value==='string'?value:JSON.stringify(value,null,2);
+  const status=value=>value==='open'?'未结束':value;
+  const section=(title,content)=>h('section',{className:'ari-detail-section'},h('h4',null,title),content);
+  function Records({group,state,onSession,onRestore,disabled}) {
+    const associations=new Map((state.associations??[]).map(a=>[a.association_id,a]));
+    return h(React.Fragment,null,
+      section(`工作段 · ${group.attempts.length}`,group.attempts.length?group.attempts.map(a=>h('article',{key:a.attempt_id},
+        h('strong',null,`${a.attempt_id} · ${status(a.state)} · ${a.mode}`),h('p',null,`${a.started_at} → ${a.ended_at??'尚未结束'}`),
+        associations.has(a.association_id)&&h('button',{onClick:()=>onSession(associations.get(a.association_id).session_id)},'打开原生会话'),
+        h('details',null,h('summary',null,'工作段记录'),h('pre',null,json(a.details))))):h('p',null,'暂无工作段')),
+      section(`阶段材料 · ${group.publications.length}`,group.publications.map(p=>h('article',{key:p.publication_id},
+        h('strong',null,`${p.publication_id} · ${p.status}`),h('p',null,p.summary),
+        (p.gaps??[]).length>0&&h('p',null,`缺口：${p.gaps.join('；')}`),
+        ...(p.items??[]).map(i=>h('details',{key:i.item_id},h('summary',null,i.ref??`pub/${p.publication_id}#${i.item_id}`),
+          h('p',null,`${i.kind} · ${i.source_path??'内嵌材料'}`),i.object_version&&h('code',null,i.object_version),h('pre',null,json(i.content))))))),
+      section(`快照 · ${group.snapshots.length}`,group.snapshots.map(s=>h('article',{key:s.snapshot_id},h('strong',null,`${s.snapshot_id} · ${s.complete?'完整':'部分'} · ${s.attempt_id}`),
+        h('details',null,h('summary',null,'文件清单'),...(s.manifest??[]).map((m,i)=>h('p',{key:i},`${m.source_path??m.path} · ${m.status??''} · ${m.version??''}`))),
+        h('button',{disabled,onClick:()=>onRestore(s.snapshot_id)},'创建接手副本')))),
+      section(`笔记 · ${group.notes.length}`,group.notes.map(n=>h('details',{key:n.note_id},h('summary',null,`${n.note_id} · ${n.kind}`),h('p',{className:'ari-preserve'},n.body)))),
+      (group.relations??[]).length>0&&section('登记关系',h(Relations,{records:group.relations})),
+      (group.references??[]).length>0&&section('固定输入与锚点',h(Relations,{records:group.references})));
+  }
+  function Relations({records}) {
+    return h('ul',{className:'ari-relations'},...records.map((r,i)=>h('li',{key:r.relation_id??`${r.kind}:${i}`},
+      h('strong',null,r.label),h('p',null,`${r.source_ref} → ${r.target_ref}`),r.note&&h('p',{className:'ari-preserve'},r.note),
+      (!r.source||!r.target)&&h('small',null,'项目级或未归属引用；未生成节点连线'),r.source&&r.source===r.target&&h('small',null,'同节点引用'))));
+  }
+  function Details({node,edge,state,act,disabled,onSession,onClose}) {
+    if(edge) return h('aside',{className:'ari-details','aria-label':'关系详情'},h('button',{onClick:onClose},'关闭详情'),h('h3',null,`${edge.source} → ${edge.target}`),h(Relations,{records:edge.records}));
+    if(!node) return h('aside',{className:'ari-details ari-detail-empty'},h('h3',null,'选择一个研究节点'),h('p',null,'查看计划、固定输入、阶段材料和全部工作段。选中节点不会启动研究。'));
+    return h('aside',{className:'ari-details','aria-label':'节点详情'},h('button',{onClick:onClose},'关闭详情'),
+      h('small',null,`${node.node_id} · ${node.status} · ${node.strategy??'continue'}`),h('h3',null,node.question),
+      h('div',{className:'ari-actions'},h('button',{disabled:disabled||node.status==='closed',onClick:()=>act('focus',{nodeId:node.node_id})},'聚焦研究'),
+        h('button',{disabled:disabled||node.status==='closed',onClick:()=>act('branch',{nodeId:node.node_id})},'创建分支')),
+      section('提出理由',h('p',{className:'ari-preserve'},node.why_now||'未记录')),
+      section('研究计划',h('p',{className:'ari-preserve'},node.plan||'未记录')),
+      h(Records,{group:node,state,onSession,onRestore:snapshotId=>act('restore',{snapshotId}),disabled}));
+  }
+  return {Details,Records,Relations};
+}
+
+const researchStyles = `
+.ari-v5{--ari-accent:#328c98;--ari-ink:var(--foreground,currentColor);--ari-line:var(--dsw-alias-border-l2,var(--border-color, #89969b55));--ari-paper:var(--dsw-alias-bg-base,var(--background-color,Canvas));padding:18px 20px 200px;height:100%;overflow:auto;color:inherit;font:inherit;box-sizing:border-box}
+.ari-v5 *{box-sizing:border-box}.ari-v5 h2,.ari-v5 h3,.ari-v5 h4{margin:0 0 12px;font-weight:600}.ari-v5 h2{font-size:20px}.ari-v5 h3{font-size:16px;line-height:1.5}.ari-v5 h4{font-size:13px}.ari-v5 p{margin:8px 0;line-height:1.6}.ari-v5 button,.ari-v5 input,.ari-v5 select{font:inherit;color:inherit;border:1px solid var(--ari-line);border-radius:6px;background:transparent;padding:6px 10px}.ari-v5 button{cursor:pointer}.ari-v5 button:hover:not(:disabled){background:#328c9818;border-color:var(--ari-accent)}.ari-v5 button:disabled{opacity:.45;cursor:default}.ari-v5 :focus-visible{outline:2px solid var(--ari-accent);outline-offset:3px}.ari-v5 button[aria-pressed=true]{background:#328c9826;border-color:var(--ari-accent)}
+.ari-header{border-bottom:1px solid var(--ari-line);padding-bottom:16px;margin-bottom:16px}.ari-overline{font-size:11px;letter-spacing:.12em;color:var(--ari-accent);font-weight:600}.ari-stats,.ari-actions,.ari-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.ari-stats{gap:20px;font-size:12px;margin:14px 0}.ari-stats strong{font-size:20px;margin-right:4px;font-variant-numeric:tabular-nums}.ari-toolbar{margin-bottom:12px}.ari-toolbar input{flex:1;min-width:150px}.ari-layout{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;align-items:start}.ari-canvas{height:560px;overflow:hidden;touch-action:none;cursor:grab;background-image:radial-gradient(#85929c38 .8px,transparent .8px);background-size:20px 20px;position:relative}.ari-canvas:active{cursor:grabbing}.ari-graph-shell{min-width:0;border:1px solid var(--ari-line);border-radius:10px;overflow:hidden}.ari-graph-tools{display:flex;align-items:center;gap:8px;padding:10px;border-bottom:1px solid var(--ari-line);font-size:11px;flex-wrap:wrap}.ari-graph-tools>span:first-child{margin-right:auto}.ari-node{cursor:pointer}.ari-node rect{fill:var(--ari-paper);stroke:var(--ari-line);stroke-width:1.5}.ari-node.ari-closed rect{fill:color-mix(in srgb,var(--ari-paper) 93%,#7e8992)}.ari-node.ari-focused rect{stroke:var(--ari-accent);stroke-width:3}.ari-node.ari-selected rect{stroke:var(--ari-accent);stroke-width:3;filter:drop-shadow(0 3px 5px #0002)}.ari-node text{fill:currentColor;font-family:inherit}.ari-node-id{font-size:13px;font-weight:700}.ari-node-status,.ari-node-meta{font-size:11px}.ari-node[data-status="proposed"] .ari-node-status{fill:#b77a33}.ari-node[data-status="closed"] .ari-node-status{fill:#7e8992}.ari-node .ari-node-status{fill:var(--ari-accent)}.ari-node-question{font-size:13px;line-height:22px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;color:inherit}.ari-edge{cursor:pointer}.ari-edge path{stroke:#7c8c97;stroke-width:1.6;fill:none}.ari-edge .ari-edge-hit{stroke:transparent;stroke-width:16}.ari-edge.ari-input path:not(.ari-edge-hit){stroke-dasharray:7 5}.ari-edge.ari-anchor path:not(.ari-edge-hit){stroke:#b77a33;stroke-dasharray:2 5}.ari-edge text{font:11px sans-serif;fill:currentColor;paint-order:stroke;stroke:var(--ari-paper);stroke-width:4;stroke-linejoin:round}.ari-edge:hover path:not(.ari-edge-hit),.ari-edge:focus path:not(.ari-edge-hit){stroke:var(--ari-accent);stroke-width:3}
+.ari-details{border-left:1px solid var(--ari-line);padding-left:16px;max-height:640px;overflow:auto;overflow-wrap:anywhere}.ari-details>button:first-child{float:right;font-size:11px;margin:0 0 8px 8px}.ari-details>small{display:block;color:var(--ari-accent);margin-bottom:10px}.ari-detail-empty{color:inherit;opacity:.7;padding-top:32px}.ari-detail-section{padding:16px 0;border-bottom:1px solid var(--ari-line)}.ari-detail-section article{margin:12px 0;padding:10px;border:1px solid var(--ari-line);border-radius:6px}.ari-detail-section p,.ari-detail-section details{font-size:12px}.ari-v5 details{margin:8px 0}.ari-v5 summary{cursor:pointer;overflow-wrap:anywhere}.ari-v5 pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px}.ari-preserve{white-space:pre-wrap}.ari-relations{padding-left:18px;font-size:12px}.ari-relations li{margin:12px 0}.ari-list{list-style:none;padding:0;margin:0;max-height:600px;overflow:auto}.ari-list button{display:block;width:100%;text-align:left;margin-bottom:8px;padding:14px}.ari-list strong{color:var(--ari-accent)}.ari-list span{display:block;margin-top:6px}.ari-list small{display:block;margin-top:8px;opacity:.7}.ari-section{border:1px solid var(--ari-line);border-radius:10px;padding:14px;margin-top:16px;overflow-wrap:anywhere}.ari-section>summary{font-weight:600}.ari-empty{padding:32px;opacity:.7}.ari-canvas>.ari-empty{position:absolute;top:30px;left:0;pointer-events:none}.ari-alert{padding:12px;border:1px solid #b77a33;border-radius:6px;margin:12px 0}.ari-alert button{margin-left:12px}.ari-updated{font-size:11px;opacity:.65;margin-left:auto}.ari-sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+/* DSH 0.1.2 chat-width handles span custom conversation slots. Disable their hit area only while Research is mounted; keep the native composer above the graph. */
+[class$="_body"]:has(.ari-v5) > [class$="_widthHandle"][data-side]{pointer-events:none}
+@media(max-width:1000px){.ari-layout{grid-template-columns:minmax(0,1fr)}.ari-details{border-left:0;border-top:1px solid var(--ari-line);padding:16px 0;max-height:none}.ari-canvas{height:440px}}@media(max-width:600px){.ari-v5{padding:12px 12px 200px}.ari-canvas{height:380px}.ari-stats{gap:12px}.ari-stats strong{font-size:16px}.ari-toolbar input{width:100%}}@media(prefers-reduced-motion:reduce){.ari-v5 *{transition:none!important;animation:none!important}}
+`;
+
+function createWorkbench(React, rpc, openSession, projectGraph, ResearchGraph, components, researchStyles) {
+  const h=React.createElement, {Details,Records}=components;
+  return function Workbench({sessionId}) {
+    const [state,setState]=React.useState(null),[error,setError]=React.useState(null),[notice,setNotice]=React.useState(null);
+    const [goal,setGoal]=React.useState(''),[busy,setBusy]=React.useState(false),[updated,setUpdated]=React.useState(null);
+    const [selected,setSelected]=React.useState(null),[edgeId,setEdgeId]=React.useState(null),[search,setSearch]=React.useState(''),[filter,setFilter]=React.useState('all');
+    const [view,setView]=React.useState(()=>window.matchMedia('(max-width:600px)').matches?'list':'graph');
+    const lifecycle=React.useRef(0),requestSeq=React.useRef(0),pending=React.useRef(false);
+    const call=React.useCallback(async(endpoint,payload={})=>{
+      const response=await rpc(endpoint,{sessionId,operationId:`${sessionId}:ui:${crypto.randomUUID()}`,...payload});
+      if(!response.ok)throw new Error(response.error?.message??'请求失败');
+      return response.value;
+    },[sessionId]);
+    const refresh=React.useCallback(async()=>{
+      const life=lifecycle.current,seq=++requestSeq.current;
+      try {const value=await call('query');if(life!==lifecycle.current||seq!==requestSeq.current)return;setState(value);setError(null);setUpdated(new Date());}
+      catch(e){if(life===lifecycle.current&&seq===requestSeq.current)setError(e.message);}
+    },[call]);
+    React.useEffect(()=>{
+      lifecycle.current++;let active=true,timer;
+      const poll=async()=>{await refresh();if(active)timer=setTimeout(poll,3000);};poll();
+      return()=>{active=false;lifecycle.current++;clearTimeout(timer);};
+    },[refresh]);
+    const model=React.useMemo(()=>projectGraph(state??{}),[state]);
+    const term=search.trim().toLocaleLowerCase();
+    const visibleIds=new Set(model.nodes.filter(n=>(filter==='all'||n.status===filter)&&(!term||`${n.node_id} ${n.question} ${n.plan} ${n.why_now}`.toLocaleLowerCase().includes(term))).map(n=>n.node_id));
+    const chosen=model.nodes.find(n=>n.node_id===selected), edge=model.edges.find(e=>e.id===edgeId);
+    const disabled=busy||!!error||!state;
+    async function act(endpoint,payload={}) {
+      if(pending.current||error)return;
+      pending.current=true;setBusy(true);setNotice(null);const life=lifecycle.current;
+      try {const value=await call(endpoint,payload);if(life!==lifecycle.current)return;setNotice(value?.sessionId?`已创建原生会话 ${value.sessionId}`:'操作已提交');await refresh();}
+      catch(e){if(life===lifecycle.current)setNotice(`操作失败：${e.message}`);}
+      finally{if(life===lifecycle.current){pending.current=false;setBusy(false);}}
+    }
+    async function navigate(id){try{await openSession(id);}catch(e){setNotice(`无法打开原生会话：${e.message}`);}}
+    const select=id=>{setSelected(id);setEdgeId(null);};
+    const btn=(label,endpoint,payload={},off=disabled)=>h('button',{disabled:off,onClick:()=>act(endpoint,payload)},label);
+    return h('div',{className:'ari-v5','aria-busy':busy},h('style',null,researchStyles),
+      h('header',{className:'ari-header'},h('div',{className:'ari-overline'},'RESEARCH / 研究工作台'),h('h2',null,state?.project.goal??'关联研究项目'),
+        state&&h(React.Fragment,null,h('div',{className:'ari-stats'},
+          h('span',null,h('strong',null,model.nodes.length),'研究节点'),h('span',null,h('strong',null,state.attempts.filter(a=>!a.ended_at).length),'未结束工作段'),
+          h('span',null,h('strong',null,Number(state.usage.known).toLocaleString()),'已记录 token'),h('span',null,h('strong',null,state.usage.unknown_count),'缺失请求')),
+          h('p',null,`项目控制：${state.project.control} · 当前工作段：${state.attempt?.attempt_id??'无'}`),
+          h('div',{className:'ari-actions'},btn('开启自主研究','auto'),btn('暂停','pause'),btn('继续','resume'),btn('停止项目','stop'),btn('解除关联','detach')))),
+      error&&h('div',{className:'ari-alert',role:'alert'},state?'连接异常，保留最后成功数据。':'暂时无法读取项目。',` ${error}`,h('button',{onClick:refresh},'重试')),
+      notice&&h('p',{role:'status'},notice),
+      !state?h('section',{className:'ari-section'},h('p',null,'初始化与关联不调用模型。项目目录采用当前 DSH 会话工作目录。'),
+        h('input',{'aria-label':'研究目标',placeholder:'研究目标',value:goal,onChange:e=>setGoal(e.target.value)}),
+        h('button',{disabled:busy||!goal.trim(),onClick:async()=>{setError(null);pending.current=false;try{setBusy(true);await call('open',{goal});await refresh();}catch(e){setNotice(e.message);}finally{setBusy(false);}}},'新建并关联'),
+        h('button',{disabled:busy,onClick:async()=>{try{setBusy(true);await call('open');await refresh();}catch(e){setNotice(e.message);}finally{setBusy(false);}}},'关联已有项目')):
+      h(React.Fragment,null,
+        h('div',{className:'ari-toolbar'},h('h3',null,'研究图'),h('input',{'aria-label':'搜索研究节点',placeholder:'搜索节点、问题或计划…',value:search,onChange:e=>setSearch(e.target.value)}),
+          h('select',{'aria-label':'筛选节点状态',value:filter,onChange:e=>setFilter(e.target.value)},...['all',...new Set(model.nodes.map(n=>n.status))].map(s=>h('option',{key:s,value:s},s==='all'?'全部状态':s))),
+          h('button',{'aria-pressed':view==='graph',onClick:()=>setView('graph')},'图'),h('button',{'aria-pressed':view==='list',onClick:()=>setView('list')},'列表'),
+          h('small',{className:'ari-updated'},updated?`更新于 ${updated.toLocaleTimeString()}`:'正在读取')),
+        h('div',{className:'ari-layout'},h('div',null,
+          h('div',{style:{display:view==='graph'?'block':'none'}},h(ResearchGraph,{model,visibleIds,selected,onSelect:select,onEdge:e=>setEdgeId(e.id),focused:state.attempt?.node_id})),
+          view==='list'&&h('ul',{className:'ari-list','aria-label':'研究节点列表'},...model.nodes.filter(n=>visibleIds.has(n.node_id)).map(n=>h('li',{key:n.node_id},h('button',{'aria-pressed':selected===n.node_id,onClick:()=>select(n.node_id)},
+            h('strong',null,`${n.node_id} · ${n.status}${state.attempt?.node_id===n.node_id?' · 当前聚焦':''}`),h('span',null,n.question),h('small',null,`${n.strategy??'continue'} · ${n.attempts.length} 工作段 · ${n.publications.length} 发布`))))),
+          view==='list'&&!visibleIds.size&&h('p',{className:'ari-empty'},'没有匹配的研究节点。')),
+          h(Details,{node:chosen,edge,state,act,disabled,onSession:navigate,onClose:()=>{setSelected(null);setEdgeId(null);}})),
+        h('details',{className:'ari-section',open:true},h('summary',null,`项目规划与未归属材料 · ${model.planning.attempts.length} 工作段 · ${model.planning.publications.length} 发布`),
+          h('p',null,'这些记录没有明确的节点归属，保留原始记录。工作段“未结束”不代表原生会话正在运行。'),btn('聚焦规划工作','focus',{nodeId:null}),
+          h(Records,{group:model.planning,state,onSession:navigate,onRestore:snapshotId=>act('restore',{snapshotId}),disabled})),
+        h('details',{className:'ari-section'},h('summary',null,`全部原生会话 · ${state.associations.length}`),...state.associations.map(a=>h('p',{key:a.association_id},
+          h('code',null,a.session_id),` · ${a.ended_at?'已解除关联':'已关联'} `,h('button',{onClick:()=>navigate(a.session_id)},'打开原生会话')))),
+        h('details',{className:'ari-section'},h('summary',null,`接手记录 · ${(state.restorations??[]).length}`),...(state.restorations??[]).map(r=>h('p',{key:r.restoration_id},`${r.snapshot_id} · ${r.source_attempt_id} → ${r.target_attempt_id??'未登记工作段'}`)))));
+  };
+}
+
+return {inject:['slots','connection','sessions'],apply(ctx){
+const rpc=(endpoint,payload)=>ctx.connection.rpc.call('/research-v5',endpoint,payload);
+const Graph=createResearchGraph(React,layoutGraph,inViewport,clampZoom);
+const Workbench=createWorkbench(React,rpc,id=>ctx.sessions.open(id),projectGraph,Graph,createResearchDetails(React),researchStyles);
+ctx.slots.inject('conversation.view',()=>ctx.slots.register({name:'conversation.view',id:'research-v5',order:51,label:'Research'},props=>React.createElement(Workbench,{...props,key:props.sessionId})));
+}};
+}});

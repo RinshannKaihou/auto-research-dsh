@@ -1,12 +1,37 @@
 {
   "name": "auto-research-v5",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Native DSH research workflow plugin",
   "type": "module",
   "main": "index.js",
-  "exports": { ".": "./index.js", "./client": "./client.js", "./package.json": "./package.json" },
-  "files": ["*.js", "cordis.patch.yml", "README.md", "python/**/*.py", "LICENSES/*"],
-  "scripts": { "prepack": "node scripts/sync-python.mjs" },
-  "dsh": { "bundle": { "patch": "cordis.patch.yml" }, "client": { "platform": "web" } },
-  "peerDependencies": { "@deepseek-ai/cordis": "^4.0.2" }
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "*.js",
+    "cordis.patch.yml",
+    "README.md",
+    "python/**/*.py",
+    "LICENSES/*",
+    "frontend/*.js",
+    "scripts/*.mjs"
+  ],
+  "scripts": {
+    "prepack": "node scripts/build-client.mjs && node scripts/sync-python.mjs",
+    "build:client": "node scripts/build-client.mjs",
+    "check:client": "node scripts/build-client.mjs --check"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.2"
+  }
 }

@@ -16,7 +16,7 @@ Build and install from this directory:
 
 ```bash
 npm pack
-dsh plugin --profile <profile-name> add ./auto-research-v5-0.3.2.tgz
+dsh plugin --profile <profile-name> add ./auto-research-v5-0.3.3.tgz
 ```
 
 Replace `<profile-name>` with the profile to modify, for example `web`, and
@@ -100,3 +100,18 @@ python3 tests/dsh-profile/run.py \
 
 Never load `tests/dsh-profile/probe.mjs` into a real profile. It is a fixture
 provider that rejects all non-fixture provider requests.
+
+## Research graph (0.3.3)
+
+The Research view defaults to a deterministic SVG node graph (a list on narrow
+screens). Selection is read-only; focus and branch require explicit buttons.
+Edges display recorded relations, fixed inputs, and history anchors. Publications,
+snapshots, and all attempts remain in the details; unassigned planning records
+remain accessible below the graph. Token usage is observation-only.
+
+See `docs/WORKBENCH.md` in the source repository for controls and failure semantics.
+The client uses the host React instance and no additional graph runtime.
+Edit `frontend/*.js`, then run `npm run build:client`; `npm run check:client`
+verifies the committed bundle. `npm pack` rebuilds it automatically.
+From the repository root, `make test-dsh-plugin` exercises projection, layout,
+async UI state transitions, and plugin boundaries.
