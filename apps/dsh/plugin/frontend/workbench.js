@@ -22,7 +22,7 @@ export function createWorkbench(React, rpc, openSession, projectGraph, ResearchG
       const life=lifecycle.current,seq=++requestSeq.current;
       try {
         const [summary,contextPreview,guidance]=await Promise.all([call('query'),call('context.preview'),call('guidance.status')]),previous=lastState.current;
-        const collections=['nodes','relations','legacy_refs','attempts','publications','notes','snapshots','restorations','associations','knowledge','checkpoints','review_todos','specialists','sessions','tasks'];
+        const collections=['nodes','relations','dependencies','consumptions','usage_gaps','legacy_refs','attempts','publications','notes','snapshots','restorations','associations','knowledge','checkpoints','review_todos','specialists','sessions','tasks'];
         const loaded=await Promise.all(collections.map(async name=>{
           if(!['nodes','attempts','review_todos','specialists','sessions','tasks'].includes(name)&&previous&&previous.counts?.[name]===summary.counts?.[name]&&previous[name])return[name,previous[name]];
           return[name,await loadCollection(name)];
@@ -43,9 +43,9 @@ export function createWorkbench(React, rpc, openSession, projectGraph, ResearchG
     const visibleIds=new Set(model.nodes.filter(n=>(filter==='all'||n.status===filter)&&(!term||`${n.node_id} ${n.question} ${n.plan} ${n.why_now}`.toLocaleLowerCase().includes(term))).map(n=>n.node_id));
     const chosen=model.nodes.find(n=>n.node_id===selected), edge=model.edges.find(e=>e.id===edgeId);
     const runtime=state?.runtime, runState=runtime?.state??'cold';
-    const roles={main:'研究主会话',exploration:'探索会话',discussion:'讨论会话',handoff:'接手会话',specialist:'节点专家',legacy:'历史会话'};
+    const roles={main:'研究主会话',node_core:'节点核心 Agent',exploration:'历史探索会话',discussion:'讨论会话',handoff:'接手会话',specialist:'节点专家',legacy:'历史会话'};
     const runLabels={manual:'尚未开始',running:'自主推进中',paused:'自主推进已暂停',stopping:'停止处理中',unverified:'停止待核实',stopped:'已停止',complete:'自主目标已结束',cold:'重启后等待显式恢复'};
-    const reasons={project:'项目暂停',project_wait:'项目暂停（等待探索）',human:'人工介入',wait:'等待探索进展',native_stop:'原生停止',host_limit:'宿主限制',fault:'执行故障',cold:'重启未恢复',complete:'目标已完成',finished:'工作段已结束',stop:'停止处理中',unverified:'待核实',legacy_history:'历史探索（不加入自主调度）'};
+    const reasons={project:'项目暂停',project_wait:'项目暂停（等待探索）',human:'人工介入',wait:'等待探索进展',native_stop:'原生停止',host_limit:'宿主限制',fault:'执行故障',cold:'重启未恢复',complete:'目标已完成',finished:'历史工作段已结束',segment_complete:'工作段已核实结束',stop:'停止处理中',unverified:'待核实',legacy_history:'历史探索（不加入自主调度）'};
     const sessionCards=(state?.sessions??[]).map(saved=>({...saved,...(runtime?.sessions??[]).find(live=>live.session_id===saved.session_id)}));
     const blockedCreations=(state?.tasks??state?.workflow?.tasks??[]).filter(t=>t.state==='unverified'&&!(state?.sessions??[]).some(s=>s.session_id===t.session_id));
     const knowledgeTerm=knowledgeSearch.trim().toLocaleLowerCase();
@@ -66,13 +66,13 @@ export function createWorkbench(React, rpc, openSession, projectGraph, ResearchG
         state&&h(React.Fragment,null,h('div',{className:'ari-stats'},
           h('span',null,h('strong',null,model.nodes.length),'研究节点'),h('span',null,h('strong',null,runtime?.running_count??'未知'),'实际运行会话'),
           h('span',null,h('strong',null,runtime?.specialist_count??0),'运行中专家'),
-          h('span',null,h('strong',null,(state.review_todos??[]).filter(item=>item.state==='pending').length),'待整理'),
+          h('span',null,h('strong',null,state.review_queue?.pending_total??'未知'),'待整理'),
           h('span',null,h('strong',null,Number(state.usage.known).toLocaleString()),'已记录 token'),h('span',null,h('strong',null,state.usage.missing??state.usage.unknown_count),'缺失请求')),
           h('p',null,`项目推进：${runLabels[runState]??runState} · 待审批：${runtime?.pending_approvals??'未知'}`),
           blockedCreations.length>0&&h('p',{role:'alert'},`需要处理：${blockedCreations.length} 个探索任务的创建结果尚未核实，保留 ${blockedCreations.length} 个研究槽位，其他任务可能排队。请在“探索任务与恢复”核实并重试；停止项目后也可使用“核实停止”。`),
           runtime?.main_session_id&&h('button',{onClick:()=>navigate(runtime.main_session_id)},'打开研究主会话'),
           h('p',null,`当前浏览会话：${roles[runtime?.current?.role]??'未知'} · ${runtime?.current?.native_status??'未知'} · ${reasons[runtime?.current?.pause_reason]??runtime?.current?.pause_reason??'无暂停'}`),
-          h('p',null,`用量：实际 ${state.usage.actual??0} · 估算 ${state.usage.estimated??0} · 进行中 ${state.usage.in_progress??0} · 讨论 ${state.usage.discussion??0} token；只监控，无费用上限。`),
+          h('p',null,`用量：实际 ${state.usage.actual??0} · 估算 ${state.usage.estimated??0} · 进行中 ${state.usage.in_progress??0} · 覆盖缺口 ${state.usage.coverage_incomplete??0} · 讨论 ${state.usage.discussion??0} token；只监控，无费用上限。`),
           h('div',{className:'ari-actions'},
             ['manual','stopped','complete'].includes(runState)&&btn(runState==='manual'?'开始自主研究':'再次开始研究','auto'),
             runState==='running'&&btn('暂停自主研究','pause'),
@@ -99,7 +99,7 @@ export function createWorkbench(React, rpc, openSession, projectGraph, ResearchG
         h('div',{className:'ari-layout'},h('div',null,
           h('div',{style:{display:view==='graph'?'block':'none'}},h(ResearchGraph,{model,visibleIds,selected,onSelect:select,onEdge:e=>setEdgeId(e.id),focused:state.attempt?.node_id})),
           view==='list'&&h('ul',{className:'ari-list','aria-label':'研究节点列表'},...model.nodes.filter(n=>visibleIds.has(n.node_id)).map(n=>h('li',{key:n.node_id},h('button',{'aria-pressed':selected===n.node_id,onClick:()=>select(n.node_id)},
-            h('strong',null,`${n.node_id} · ${n.status}${state.attempt?.node_id===n.node_id?' · 当前执行节点':''}`),h('span',null,n.question),h('small',null,`${n.strategy??'continue'} · ${n.attempts.length} 工作段 · ${n.publications.length} 发布`))))),
+            h('strong',null,`${n.node_id} · ${n.status}${state.attempt?.node_id===n.node_id?' · 当前执行节点':''}`),h('span',null,n.question),h('small',null,`${n.origin_class} · ${n.strategy??'continue'} · ${n.attempts.length} 工作段 · ${n.publications.length} 发布`))))),
           view==='list'&&!visibleIds.size&&h('p',{className:'ari-empty'},'没有匹配的研究节点。')),
           h(Details,{node:chosen,edge,state,act,disabled,onSession:navigate,onClose:()=>{setSelected(null);setEdgeId(null);}})),
         h('details',{className:'ari-section',open:true},h('summary',null,`项目规划与未归属材料 · ${model.planning.attempts.length} 工作段 · ${model.planning.publications.length} 发布`),
@@ -115,7 +115,8 @@ export function createWorkbench(React, rpc, openSession, projectGraph, ResearchG
         h('details',{className:'ari-section',open:true},h('summary',null,`项目会话 · ${sessionCards.length}`),...sessionCards.map(s=>h('article',{key:s.session_id},
           h('strong',null,`${s.detached?'历史会话':roles[s.role]} · ${s.node_id??'项目规划'}`),h('p',null,`${s.name??s.session_id} · ${s.native_status??'未加载'} · ${reasons[s.pause_reason]??s.pause_reason??'无暂停'}`),
           h('p',null,s.cwd??'目录未知'),h('button',{onClick:()=>navigate(s.session_id)},'打开会话'),
-          ['human','native_stop','finished','complete'].includes(s.pause_reason)&&h('button',{disabled,onClick:()=>act('resume',{targetSessionId:s.session_id})},'继续此会话'),
+          ['human','native_stop','finished','segment_complete','complete'].includes(s.pause_reason)&&h('button',{disabled,onClick:()=>act('resume',{targetSessionId:s.session_id})},'继续此会话'),
+          ['requested','unverified'].includes(s.close_state)&&h('button',{disabled,onClick:()=>act('verify-close',{targetSessionId:s.session_id})},'核实工作段收尾'),
           ['fault','host_limit','unverified'].includes(s.pause_reason)&&h('button',{disabled,onClick:()=>act('retry',{targetSessionId:s.session_id})},'核实并重试'),
           h('details',null,h('summary',null,'关联历史与原生状态'),h('pre',null,JSON.stringify({goal:s.goal,jobs:s.jobs,intervals:state.associations.filter(a=>a.session_id===s.session_id)},null,2)))))),
         h('details',{className:'ari-section'},h('summary',null,`节点内部协作 · ${(state.specialists??[]).length}`),...(state.specialists??[]).map(s=>h('article',{key:s.task_id},h('strong',null,`${s.task_id} · ${s.purpose} · ${s.state}`),h('p',null,`${s.label} · ${s.node_id??'项目规划'}`),s.child_session_id&&h('button',{onClick:()=>navigate(s.child_session_id)},'打开专家会话'),s.state==='unverified'&&h('button',{disabled,onClick:()=>act('verify-specialist',{taskId:s.task_id})},'核实专家退出'),s.error&&h('p',{role:'alert'},s.error)))),

@@ -22,6 +22,13 @@ function agentFor(ctx, sessionId) {
   return agent;
 }
 
+export function registerNativeSubagentGuard(ctx, domain) {
+  return ctx.tools.guard(exec => {
+    if (exec.name !== 'subagent' || !exec.agent || !domain.managedRole(exec.agent)) return undefined;
+    return 'Managed research executors must use research_delegate so specialist identity, lineage, usage, and exit state are recorded.';
+  });
+}
+
 export function apply(ctx, config = {}) {
   let storage;
   try {
@@ -45,6 +52,7 @@ export function apply(ctx, config = {}) {
   }));
   disposers.push(registerResearchCommand(ctx, domain));
   disposers.push(...registerResearchTools(ctx, domain));
+  disposers.push(registerNativeSubagentGuard(ctx, domain));
   disposers.push(registerResearchEvents(ctx, domain));
 
   ctx.inject(['connection', 'webServer'], scoped => {
@@ -88,6 +96,7 @@ export function apply(ctx, config = {}) {
         }
         if (endpoint === 'resume') return { ok: true, value: await domain.resumeSession(agent, payload.targetSessionId, id) };
         if (endpoint === 'retry') return { ok: true, value: payload.taskId ? await domain.retryTask(agent, payload.taskId, id) : await domain.resumeSession(agent, payload.targetSessionId, id, { retry: true }) };
+        if (endpoint === 'verify-close') return { ok: true, value: await domain.verifyClose(agent, payload.targetSessionId, id) };
         if (endpoint === 'verify-specialist') return { ok: true, value: await domain.verifySpecialist(agent, payload.taskId, id) };
         if (endpoint === 'verify-stop') return { ok: true, value: await domain.verifyStop(agent, id) };
         if (endpoint === 'focus') {

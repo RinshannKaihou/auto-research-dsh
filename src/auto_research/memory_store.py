@@ -735,13 +735,29 @@ class MemoryStore:
                 "SELECT * FROM node_checkpoints WHERE node_id IS ? ORDER BY revision DESC LIMIT 1",
                 (node_id,),
             ).fetchone()
-            review_todos = [
-                dict(row)
-                for row in db.execute(
-                    "SELECT * FROM review_todos WHERE state='pending' AND (? IS NULL OR node_id IS ? OR node_id IS NULL) ORDER BY rowid LIMIT 8",
+            review_rows = list(
+                db.execute(
+                    "SELECT rowid AS cursor,* FROM review_todos WHERE state='pending' "
+                    "AND (? IS NULL OR node_id IS ? OR node_id IS NULL) ORDER BY rowid LIMIT 8",
                     (node_id, node_id),
                 )
-            ]
+            )
+            pending_total = int(
+                db.execute(
+                    "SELECT COUNT(*) FROM review_todos WHERE state='pending' "
+                    "AND (? IS NULL OR node_id IS ? OR node_id IS NULL)",
+                    (node_id, node_id),
+                ).fetchone()[0]
+            )
+            review_todos = {
+                "pending_total": pending_total,
+                "shown_count": len(review_rows),
+                "has_more": pending_total > len(review_rows),
+                "cursor": review_rows[-1]["cursor"] if review_rows else None,
+                "trigger_types": sorted({row["trigger_kind"] for row in review_rows}),
+                "claim_owner": session_id if any(row["state"] == "running" for row in review_rows) else None,
+                "items": [dict(row) for row in review_rows],
+            }
             # Fixed inputs determine provenance. Global question recency must never
             # crowd out an input's early negative results or later corrections.
             related_nodes = {node_id} if node_id else set()
@@ -919,6 +935,10 @@ class MemoryStore:
                     if attempt
                     else None,
                 ),
+                # Queue pressure is control-plane state, not optional background
+                # memory.  Put it ahead of the potentially large knowledge blocks
+                # so the total and its bounded sample survive context pressure.
+                ("pending_review", review_todos),
                 ("knowledge", knowledge),
                 ("questions", questions),
                 ("frozen_context", frozen_context),
@@ -932,7 +952,6 @@ class MemoryStore:
                     if checkpoint
                     else None,
                 ),
-                ("pending_review", review_todos),
                 ("method_guidance", guidance_cards),
                 ("recent_node_notes", list(reversed(notes))),
                 (
@@ -948,7 +967,7 @@ class MemoryStore:
             included_refs = []
             max_chars = max(500, min(max_chars, 12000))
             for name, value in blocks:
-                if value is None or value == []:
+                if value is None or value == [] or (name == "pending_review" and not value["pending_total"]):
                     continue
                 allowance = min(
                     max_chars - used - 150,
@@ -958,6 +977,7 @@ class MemoryStore:
                         "task": 2200,
                         "specialist_task": 1400,
                         "attempt": 400,
+                        "pending_review": 2200,
                         "knowledge": 4000,
                         "questions": 1600 if coordinator else 800,
                         "frozen_context": 1600,

@@ -41,6 +41,19 @@ function projectGraph(state) {
     if (!edges.has(id)) edges.set(id,{id,source,target,records:[]});
     edges.get(id).records.push(record);
   }
+  const incomingDependencies = new Map();
+  for (const dependency of state.dependencies ?? []) {
+    const source = nodes.has(dependency.predecessor_node_id) ? dependency.predecessor_node_id : null;
+    const target = nodes.has(dependency.successor_node_id) ? dependency.successor_node_id : null;
+    const record = {...dependency,kind:'dependency',source,target,label:dependency.relation_type};
+    if (target) {
+      const list=incomingDependencies.get(target)??[];list.push(record);incomingDependencies.set(target,list);
+      nodes.get(target).relations.push(record);
+    }
+    if (source) nodes.get(source).relations.push(record);
+    if (!source || !target) planning.relations.push(record);
+    link(source,target,record);
+  }
   for (const n of nodes.values()) {
     for (const [kind,refs] of [['input',n.inputs ?? []],['anchor',n.anchor_ref ? [n.anchor_ref] : []],['question',n.question_ref ? [n.question_ref] : []]]) {
       for (const ref of refs) {
@@ -59,6 +72,15 @@ function projectGraph(state) {
     link(source,target,record);
   }
   const edgeList = [...edges.values()].sort((a,b) => a.id.localeCompare(b.id));
+  for (const node of nodes.values()) {
+    node.origin_class = node.origin_kind === 'root' && node.root_reason
+      ? 'explicit_root'
+      : node.origin_kind === 'legacy_unresolved'
+        ? 'legacy_unresolved'
+        : node.origin_kind === 'derived' && (incomingDependencies.get(node.node_id)?.length ?? 0) > 0
+          ? 'derived'
+          : 'protocol_violation';
+  }
   return {nodes:[...nodes.values()],edges:edgeList,planning,resolve,
     structuralKey:JSON.stringify([ordered.map(n => [n.node_id,n.created_at]),edgeList.map(e => [e.source,e.target])])};
 }
@@ -242,9 +264,10 @@ const researchStyles = `
 .ari-v5 *{box-sizing:border-box}.ari-v5 h2,.ari-v5 h3,.ari-v5 h4{margin:0 0 12px;font-weight:600}.ari-v5 h2{font-size:20px}.ari-v5 h3{font-size:16px;line-height:1.5}.ari-v5 h4{font-size:13px}.ari-v5 p{margin:8px 0;line-height:1.6}.ari-v5 button,.ari-v5 input,.ari-v5 select{font:inherit;color:inherit;border:1px solid var(--ari-line);border-radius:6px;background:transparent;padding:6px 10px}.ari-v5 button{cursor:pointer}.ari-v5 button:hover:not(:disabled){background:#328c9818;border-color:var(--ari-accent)}.ari-v5 button:disabled{opacity:.45;cursor:default}.ari-v5 :focus-visible{outline:2px solid var(--ari-accent);outline-offset:3px}.ari-v5 button[aria-pressed=true]{background:#328c9826;border-color:var(--ari-accent)}
 .ari-header{border-bottom:1px solid var(--ari-line);padding-bottom:16px;margin-bottom:16px}.ari-overline{font-size:11px;letter-spacing:.12em;color:var(--ari-accent);font-weight:600}.ari-stats,.ari-actions,.ari-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.ari-stats{gap:20px;font-size:12px;margin:14px 0}.ari-stats strong{font-size:20px;margin-right:4px;font-variant-numeric:tabular-nums}.ari-toolbar{margin-bottom:12px}.ari-toolbar input{flex:1;min-width:150px}.ari-layout{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;align-items:start}.ari-canvas{height:560px;overflow:hidden;touch-action:none;cursor:grab;background-image:radial-gradient(#85929c38 .8px,transparent .8px);background-size:20px 20px;position:relative}.ari-canvas:active{cursor:grabbing}.ari-graph-shell{min-width:0;border:1px solid var(--ari-line);border-radius:10px;overflow:hidden}.ari-graph-tools{display:flex;align-items:center;gap:8px;padding:10px;border-bottom:1px solid var(--ari-line);font-size:11px;flex-wrap:wrap}.ari-graph-tools>span:first-child{margin-right:auto}.ari-node{cursor:pointer}.ari-node rect{fill:var(--ari-paper);stroke:var(--ari-line);stroke-width:1.5}.ari-node.ari-closed rect{fill:color-mix(in srgb,var(--ari-paper) 93%,#7e8992)}.ari-node.ari-focused rect{stroke:var(--ari-accent);stroke-width:3}.ari-node.ari-selected rect{stroke:var(--ari-accent);stroke-width:3;filter:drop-shadow(0 3px 5px #0002)}.ari-node text{fill:currentColor;font-family:inherit}.ari-node-id{font-size:13px;font-weight:700}.ari-node-status,.ari-node-meta{font-size:11px}.ari-node[data-status="proposed"] .ari-node-status{fill:#b77a33}.ari-node[data-status="closed"] .ari-node-status{fill:#7e8992}.ari-node .ari-node-status{fill:var(--ari-accent)}.ari-node-question{font-size:13px;line-height:22px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;color:inherit}.ari-edge{cursor:pointer}.ari-edge path{stroke:#7c8c97;stroke-width:1.6;fill:none}.ari-edge .ari-edge-hit{stroke:transparent;stroke-width:16}.ari-edge.ari-input path:not(.ari-edge-hit){stroke-dasharray:7 5}.ari-edge.ari-anchor path:not(.ari-edge-hit){stroke:#b77a33;stroke-dasharray:2 5}.ari-edge text{font:11px sans-serif;fill:currentColor;paint-order:stroke;stroke:var(--ari-paper);stroke-width:4;stroke-linejoin:round}.ari-edge:hover path:not(.ari-edge-hit),.ari-edge:focus path:not(.ari-edge-hit){stroke:var(--ari-accent);stroke-width:3}
 .ari-details{border-left:1px solid var(--ari-line);padding-left:16px;max-height:640px;overflow:auto;overflow-wrap:anywhere}.ari-details>button:first-child{float:right;font-size:11px;margin:0 0 8px 8px}.ari-details>small{display:block;color:var(--ari-accent);margin-bottom:10px}.ari-detail-empty{color:inherit;opacity:.7;padding-top:32px}.ari-detail-section{padding:16px 0;border-bottom:1px solid var(--ari-line)}.ari-detail-section article{margin:12px 0;padding:10px;border:1px solid var(--ari-line);border-radius:6px}.ari-detail-section p,.ari-detail-section details{font-size:12px}.ari-v5 details{margin:8px 0}.ari-v5 summary{cursor:pointer;overflow-wrap:anywhere}.ari-v5 pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px}.ari-preserve{white-space:pre-wrap}.ari-relations{padding-left:18px;font-size:12px}.ari-relations li{margin:12px 0}.ari-list{list-style:none;padding:0;margin:0;max-height:600px;overflow:auto}.ari-list button{display:block;width:100%;text-align:left;margin-bottom:8px;padding:14px}.ari-list strong{color:var(--ari-accent)}.ari-list span{display:block;margin-top:6px}.ari-list small{display:block;margin-top:8px;opacity:.7}.ari-section{border:1px solid var(--ari-line);border-radius:10px;padding:14px;margin-top:16px;overflow-wrap:anywhere}.ari-section>summary{font-weight:600}.ari-empty{padding:32px;opacity:.7}.ari-canvas>.ari-empty{position:absolute;top:30px;left:0;pointer-events:none}.ari-alert{padding:12px;border:1px solid #b77a33;border-radius:6px;margin:12px 0}.ari-alert button{margin-left:12px}.ari-updated{font-size:11px;opacity:.65;margin-left:auto}.ari-sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+.ari-receipt{--ari-accent:#328c98;--ari-line:var(--dsw-alias-border-l2,var(--border-color,#89969b55));--ari-paper:var(--dsw-alias-bg-base,var(--background-color,Canvas));display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid color-mix(in srgb,var(--ari-accent) 45%,var(--ari-line));border-radius:9px;background:color-mix(in srgb,var(--ari-paper) 92%,var(--ari-accent));font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.ari-receipt-mark{display:grid;place-items:center;width:26px;height:26px;border-radius:6px;background:var(--ari-accent);color:var(--ari-paper);font-weight:800}.ari-receipt-copy{display:grid;gap:1px;min-width:0}.ari-receipt-copy strong,.ari-receipt-copy small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.ari-receipt-entry{margin-left:auto;font-size:12px;color:var(--ari-accent);white-space:nowrap}.ari-receipt-error{border-color:#b45353;background:color-mix(in srgb,var(--ari-paper) 92%,#b45353)}.ari-receipt-error .ari-receipt-mark{background:#b45353}
 /* DSH 0.1.2 chat-width handles span custom conversation slots. Disable their hit area only while Research is mounted; keep the native composer above the graph. */
 [class$="_body"]:has(.ari-v5) > [class$="_widthHandle"][data-side]{pointer-events:none}
-@media(max-width:1000px){.ari-layout{grid-template-columns:minmax(0,1fr)}.ari-details{border-left:0;border-top:1px solid var(--ari-line);padding:16px 0;max-height:none}.ari-canvas{height:440px}}@media(max-width:600px){.ari-v5{padding:12px 12px 200px}.ari-canvas{height:380px}.ari-stats{gap:12px}.ari-stats strong{font-size:16px}.ari-toolbar input{width:100%}}@media(prefers-reduced-motion:reduce){.ari-v5 *{transition:none!important;animation:none!important}}
+@media(max-width:1000px){.ari-layout{grid-template-columns:minmax(0,1fr)}.ari-details{border-left:0;border-top:1px solid var(--ari-line);padding:16px 0;max-height:none}.ari-canvas{height:440px}}@media(max-width:600px){.ari-v5{padding:12px 12px 200px}.ari-canvas{height:380px}.ari-stats{gap:12px}.ari-stats strong{font-size:16px}.ari-toolbar input{width:100%}.ari-receipt-entry{display:none}}@media(prefers-reduced-motion:reduce){.ari-v5 *{transition:none!important;animation:none!important}}
 `;
 
 function createWorkbench(React, rpc, openSession, projectGraph, ResearchGraph, components, researchStyles) {
@@ -271,7 +294,7 @@ function createWorkbench(React, rpc, openSession, projectGraph, ResearchGraph, c
       const life=lifecycle.current,seq=++requestSeq.current;
       try {
         const [summary,contextPreview,guidance]=await Promise.all([call('query'),call('context.preview'),call('guidance.status')]),previous=lastState.current;
-        const collections=['nodes','relations','legacy_refs','attempts','publications','notes','snapshots','restorations','associations','knowledge','checkpoints','review_todos','specialists','sessions','tasks'];
+        const collections=['nodes','relations','dependencies','consumptions','usage_gaps','legacy_refs','attempts','publications','notes','snapshots','restorations','associations','knowledge','checkpoints','review_todos','specialists','sessions','tasks'];
         const loaded=await Promise.all(collections.map(async name=>{
           if(!['nodes','attempts','review_todos','specialists','sessions','tasks'].includes(name)&&previous&&previous.counts?.[name]===summary.counts?.[name]&&previous[name])return[name,previous[name]];
           return[name,await loadCollection(name)];
@@ -292,9 +315,9 @@ function createWorkbench(React, rpc, openSession, projectGraph, ResearchGraph, c
     const visibleIds=new Set(model.nodes.filter(n=>(filter==='all'||n.status===filter)&&(!term||`${n.node_id} ${n.question} ${n.plan} ${n.why_now}`.toLocaleLowerCase().includes(term))).map(n=>n.node_id));
     const chosen=model.nodes.find(n=>n.node_id===selected), edge=model.edges.find(e=>e.id===edgeId);
     const runtime=state?.runtime, runState=runtime?.state??'cold';
-    const roles={main:'研究主会话',exploration:'探索会话',discussion:'讨论会话',handoff:'接手会话',specialist:'节点专家',legacy:'历史会话'};
+    const roles={main:'研究主会话',node_core:'节点核心 Agent',exploration:'历史探索会话',discussion:'讨论会话',handoff:'接手会话',specialist:'节点专家',legacy:'历史会话'};
     const runLabels={manual:'尚未开始',running:'自主推进中',paused:'自主推进已暂停',stopping:'停止处理中',unverified:'停止待核实',stopped:'已停止',complete:'自主目标已结束',cold:'重启后等待显式恢复'};
-    const reasons={project:'项目暂停',project_wait:'项目暂停（等待探索）',human:'人工介入',wait:'等待探索进展',native_stop:'原生停止',host_limit:'宿主限制',fault:'执行故障',cold:'重启未恢复',complete:'目标已完成',finished:'工作段已结束',stop:'停止处理中',unverified:'待核实',legacy_history:'历史探索（不加入自主调度）'};
+    const reasons={project:'项目暂停',project_wait:'项目暂停（等待探索）',human:'人工介入',wait:'等待探索进展',native_stop:'原生停止',host_limit:'宿主限制',fault:'执行故障',cold:'重启未恢复',complete:'目标已完成',finished:'历史工作段已结束',segment_complete:'工作段已核实结束',stop:'停止处理中',unverified:'待核实',legacy_history:'历史探索（不加入自主调度）'};
     const sessionCards=(state?.sessions??[]).map(saved=>({...saved,...(runtime?.sessions??[]).find(live=>live.session_id===saved.session_id)}));
     const blockedCreations=(state?.tasks??state?.workflow?.tasks??[]).filter(t=>t.state==='unverified'&&!(state?.sessions??[]).some(s=>s.session_id===t.session_id));
     const knowledgeTerm=knowledgeSearch.trim().toLocaleLowerCase();
@@ -315,13 +338,13 @@ function createWorkbench(React, rpc, openSession, projectGraph, ResearchGraph, c
         state&&h(React.Fragment,null,h('div',{className:'ari-stats'},
           h('span',null,h('strong',null,model.nodes.length),'研究节点'),h('span',null,h('strong',null,runtime?.running_count??'未知'),'实际运行会话'),
           h('span',null,h('strong',null,runtime?.specialist_count??0),'运行中专家'),
-          h('span',null,h('strong',null,(state.review_todos??[]).filter(item=>item.state==='pending').length),'待整理'),
+          h('span',null,h('strong',null,state.review_queue?.pending_total??'未知'),'待整理'),
           h('span',null,h('strong',null,Number(state.usage.known).toLocaleString()),'已记录 token'),h('span',null,h('strong',null,state.usage.missing??state.usage.unknown_count),'缺失请求')),
           h('p',null,`项目推进：${runLabels[runState]??runState} · 待审批：${runtime?.pending_approvals??'未知'}`),
           blockedCreations.length>0&&h('p',{role:'alert'},`需要处理：${blockedCreations.length} 个探索任务的创建结果尚未核实，保留 ${blockedCreations.length} 个研究槽位，其他任务可能排队。请在“探索任务与恢复”核实并重试；停止项目后也可使用“核实停止”。`),
           runtime?.main_session_id&&h('button',{onClick:()=>navigate(runtime.main_session_id)},'打开研究主会话'),
           h('p',null,`当前浏览会话：${roles[runtime?.current?.role]??'未知'} · ${runtime?.current?.native_status??'未知'} · ${reasons[runtime?.current?.pause_reason]??runtime?.current?.pause_reason??'无暂停'}`),
-          h('p',null,`用量：实际 ${state.usage.actual??0} · 估算 ${state.usage.estimated??0} · 进行中 ${state.usage.in_progress??0} · 讨论 ${state.usage.discussion??0} token；只监控，无费用上限。`),
+          h('p',null,`用量：实际 ${state.usage.actual??0} · 估算 ${state.usage.estimated??0} · 进行中 ${state.usage.in_progress??0} · 覆盖缺口 ${state.usage.coverage_incomplete??0} · 讨论 ${state.usage.discussion??0} token；只监控，无费用上限。`),
           h('div',{className:'ari-actions'},
             ['manual','stopped','complete'].includes(runState)&&btn(runState==='manual'?'开始自主研究':'再次开始研究','auto'),
             runState==='running'&&btn('暂停自主研究','pause'),
@@ -348,7 +371,7 @@ function createWorkbench(React, rpc, openSession, projectGraph, ResearchGraph, c
         h('div',{className:'ari-layout'},h('div',null,
           h('div',{style:{display:view==='graph'?'block':'none'}},h(ResearchGraph,{model,visibleIds,selected,onSelect:select,onEdge:e=>setEdgeId(e.id),focused:state.attempt?.node_id})),
           view==='list'&&h('ul',{className:'ari-list','aria-label':'研究节点列表'},...model.nodes.filter(n=>visibleIds.has(n.node_id)).map(n=>h('li',{key:n.node_id},h('button',{'aria-pressed':selected===n.node_id,onClick:()=>select(n.node_id)},
-            h('strong',null,`${n.node_id} · ${n.status}${state.attempt?.node_id===n.node_id?' · 当前执行节点':''}`),h('span',null,n.question),h('small',null,`${n.strategy??'continue'} · ${n.attempts.length} 工作段 · ${n.publications.length} 发布`))))),
+            h('strong',null,`${n.node_id} · ${n.status}${state.attempt?.node_id===n.node_id?' · 当前执行节点':''}`),h('span',null,n.question),h('small',null,`${n.origin_class} · ${n.strategy??'continue'} · ${n.attempts.length} 工作段 · ${n.publications.length} 发布`))))),
           view==='list'&&!visibleIds.size&&h('p',{className:'ari-empty'},'没有匹配的研究节点。')),
           h(Details,{node:chosen,edge,state,act,disabled,onSession:navigate,onClose:()=>{setSelected(null);setEdgeId(null);}})),
         h('details',{className:'ari-section',open:true},h('summary',null,`项目规划与未归属材料 · ${model.planning.attempts.length} 工作段 · ${model.planning.publications.length} 发布`),
@@ -364,7 +387,8 @@ function createWorkbench(React, rpc, openSession, projectGraph, ResearchGraph, c
         h('details',{className:'ari-section',open:true},h('summary',null,`项目会话 · ${sessionCards.length}`),...sessionCards.map(s=>h('article',{key:s.session_id},
           h('strong',null,`${s.detached?'历史会话':roles[s.role]} · ${s.node_id??'项目规划'}`),h('p',null,`${s.name??s.session_id} · ${s.native_status??'未加载'} · ${reasons[s.pause_reason]??s.pause_reason??'无暂停'}`),
           h('p',null,s.cwd??'目录未知'),h('button',{onClick:()=>navigate(s.session_id)},'打开会话'),
-          ['human','native_stop','finished','complete'].includes(s.pause_reason)&&h('button',{disabled,onClick:()=>act('resume',{targetSessionId:s.session_id})},'继续此会话'),
+          ['human','native_stop','finished','segment_complete','complete'].includes(s.pause_reason)&&h('button',{disabled,onClick:()=>act('resume',{targetSessionId:s.session_id})},'继续此会话'),
+          ['requested','unverified'].includes(s.close_state)&&h('button',{disabled,onClick:()=>act('verify-close',{targetSessionId:s.session_id})},'核实工作段收尾'),
           ['fault','host_limit','unverified'].includes(s.pause_reason)&&h('button',{disabled,onClick:()=>act('retry',{targetSessionId:s.session_id})},'核实并重试'),
           h('details',null,h('summary',null,'关联历史与原生状态'),h('pre',null,JSON.stringify({goal:s.goal,jobs:s.jobs,intervals:state.associations.filter(a=>a.session_id===s.session_id)},null,2)))))),
         h('details',{className:'ari-section'},h('summary',null,`节点内部协作 · ${(state.specialists??[]).length}`),...(state.specialists??[]).map(s=>h('article',{key:s.task_id},h('strong',null,`${s.task_id} · ${s.purpose} · ${s.state}`),h('p',null,`${s.label} · ${s.node_id??'项目规划'}`),s.child_session_id&&h('button',{onClick:()=>navigate(s.child_session_id)},'打开专家会话'),s.state==='unverified'&&h('button',{disabled,onClick:()=>act('verify-specialist',{taskId:s.task_id})},'核实专家退出'),s.error&&h('p',{role:'alert'},s.error)))),
@@ -380,10 +404,34 @@ function createWorkbench(React, rpc, openSession, projectGraph, ResearchGraph, c
   };
 }
 
+function createResearchReceipt(React) {
+  const h=React.createElement;
+  return function ResearchReceipt({sessionId,useReceipt,refresh}) {
+    // DSH's public slot renderer binds Observable faces declared under
+    // `hooks.receipt` to a conventional `useReceipt` component prop.
+    const snapshot=useReceipt(value=>value);
+    React.useEffect(()=>{void refresh(sessionId);},[sessionId,refresh]);
+    if(!snapshot?.associated&&!snapshot?.command)return null;
+    const failed=snapshot.command?.kind==='error';
+    return h('aside',{className:`ari-receipt ${failed?'ari-receipt-error':''}`,role:failed?'alert':'status','aria-live':'polite'},
+      h('style',null,researchStyles),h('span',{className:'ari-receipt-mark','aria-hidden':'true'},failed?'!':'R'),
+      h('span',{className:'ari-receipt-copy'},
+        h('strong',null,failed?'Research 命令未完成':snapshot.project?.goal??'Research 已关联'),
+        h('small',null,failed?(snapshot.command?.text??'请查看命令结果'):`${snapshot.project?.control??'manual'} · schema ${snapshot.schema_version??'?'}`)),
+      h('span',{className:'ari-receipt-entry'},'打开上方 Research 标签 →'));
+  };
+}
+
 return {inject:['slots','connection','sessions'],apply(ctx){
 const rpc=(endpoint,payload)=>ctx.connection.rpc.call('/research-v5',endpoint,payload);
 const Graph=createResearchGraph(React,layoutGraph,inViewport,clampZoom);
 const Workbench=createWorkbench(React,rpc,id=>ctx.sessions.open(id),projectGraph,Graph,createResearchDetails(React),researchStyles);
+const Receipt=createResearchReceipt(React),receiptValues=new Map(),receiptListeners=new Map();
+const receiptStore=sessionId=>({getSnapshot:()=>receiptValues.get(sessionId)??null,subscribe:listener=>{const set=receiptListeners.get(sessionId)??new Set();set.add(listener);receiptListeners.set(sessionId,set);return()=>set.delete(listener);}});
+const publishReceipt=(sessionId,value)=>{receiptValues.set(sessionId,value);for(const listener of receiptListeners.get(sessionId)??[])listener();};
+const refreshReceipt=async sessionId=>{try{const response=await rpc('status',{sessionId});if(response.ok)publishReceipt(sessionId,{...(receiptValues.get(sessionId)??{}),associated:true,...response.value});}catch{}};
+ctx.on('command/executed',(sessionId,commandName,result)=>{if(commandName!=='research')return;publishReceipt(sessionId,{...(receiptValues.get(sessionId)??{}),command:result});void refreshReceipt(sessionId);});
+ctx.slots.inject('conversation.input.dock',()=>ctx.slots.register({name:'conversation.input.dock',id:'research-receipt',order:20,inject:sessionId=>({sessionId,hooks:{receipt:receiptStore(sessionId)},refresh:refreshReceipt})},Receipt));
 ctx.slots.inject('conversation.view',()=>ctx.slots.register({name:'conversation.view',id:'research-v5',order:51,label:'Research'},props=>React.createElement(Workbench,{...props,key:props.sessionId})));
 }};
 }});

@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS workflow_sessions (
  session_id TEXT PRIMARY KEY, host_id TEXT NOT NULL, role TEXT NOT NULL,
  node_id TEXT, cwd TEXT, pause_reason TEXT, waiting TEXT NOT NULL DEFAULT '[]',
  context TEXT NOT NULL DEFAULT '{}', goal_id TEXT, goal_revision INTEGER,
- detached INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
+ detached INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
+ close_state TEXT, close_attempt_id TEXT, close_reason TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS unique_main_session ON workflow_sessions(role)
  WHERE role='main' AND detached=0;
@@ -144,7 +145,7 @@ class WorkflowStore:
         session_filter = (
             """detached=0 AND (
             role='main' OR session_id=? OR
-            (role='exploration' AND (
+            (role IN ('node_core','exploration') AND (
                 session_id IN (SELECT session_id FROM exploration_tasks WHERE state IN %s)
                 OR session_id IN (SELECT a.session_id FROM associations a JOIN attempts t USING(association_id) WHERE t.ended_at IS NULL)
                 OR COALESCE(pause_reason,'') NOT IN ('finished','complete','stop','legacy_history')))
@@ -167,7 +168,7 @@ class WorkflowStore:
             columns = (
                 "*"
                 if name != "sessions"
-                else "session_id,host_id,role,node_id,cwd,pause_reason,waiting,goal_id,goal_revision,detached,created_at"
+                else "session_id,host_id,role,node_id,cwd,pause_reason,waiting,goal_id,goal_revision,detached,created_at,close_state,close_attempt_id,close_reason"
             )
             if name == "tasks":
                 columns = "task_id,operation_id,parent_session_id,node_id,session_id,state,cwd,error,generation,created_at,updated_at"
@@ -198,7 +199,7 @@ class WorkflowStore:
                 next_cursors[name] = rows[99]["_key"]
         row = db.execute("SELECT * FROM workflow_project WHERE id=1").fetchone()
         current = db.execute(
-            "SELECT session_id,host_id,role,node_id,cwd,pause_reason,waiting,goal_id,goal_revision,detached,created_at FROM workflow_sessions WHERE session_id=?",
+            "SELECT session_id,host_id,role,node_id,cwd,pause_reason,waiting,goal_id,goal_revision,detached,created_at,close_state,close_attempt_id,close_reason FROM workflow_sessions WHERE session_id=?",
             (session_id,),
         ).fetchone()
         result.update(
@@ -281,6 +282,7 @@ class WorkflowStore:
                 )
                 if role not in {
                     "main",
+                    "node_core",
                     "exploration",
                     "discussion",
                     "handoff",
@@ -351,7 +353,10 @@ class WorkflowStore:
             elif action == "session":
                 if not current:
                     raise NotFoundError("Session role is missing")
-                allowed = {"pause_reason", "waiting", "goal_id", "goal_revision", "detached", "cwd"}
+                allowed = {
+                    "pause_reason", "waiting", "goal_id", "goal_revision", "detached", "cwd",
+                    "close_state", "close_attempt_id", "close_reason",
+                }
                 for key, value in fields.items():
                     if key not in allowed:
                         raise ValidationError(f"Unsupported session field {key}")
@@ -362,7 +367,7 @@ class WorkflowStore:
             elif action == "task":
                 if (
                     not current
-                    or current["role"] not in {"main", "exploration"}
+                    or current["role"] not in {"main", "node_core", "exploration"}
                     or current["detached"]
                 ):
                     raise ConflictError("Only research agents may dispatch")
@@ -387,6 +392,24 @@ class WorkflowStore:
                 ).fetchone()
                 if live:
                     return dict(live)
+                prior = db.execute(
+                    "SELECT * FROM exploration_tasks WHERE node_id=? ORDER BY created_at DESC LIMIT 1",
+                    (node["node_id"],),
+                ).fetchone()
+                if prior:
+                    if prior["state"] == "finished" and prior["cwd"]:
+                        db.execute(
+                            "UPDATE exploration_tasks SET state='queued',parent_session_id=?,"
+                            "generation=?,error=NULL,updated_at=? WHERE task_id=?",
+                            (session_id, view["run"]["generation"], at, prior["task_id"]),
+                        )
+                        return dict(
+                            db.execute(
+                                "SELECT * FROM exploration_tasks WHERE task_id=?",
+                                (prior["task_id"],),
+                            ).fetchone()
+                        )
+                    return dict(prior)
                 task_id = "T-" + hashlib.sha256(operation_id.encode()).hexdigest()[:20]
                 context = {**node, "inputs": json.loads(node["inputs"])}
                 sid = "research-" + str(uuid4())
@@ -526,7 +549,7 @@ class WorkflowStore:
                     (at,),
                 )
                 db.execute(
-                    "UPDATE workflow_sessions SET pause_reason='cold' WHERE role IN ('main','exploration') AND detached=0 AND (pause_reason IS NULL OR pause_reason IN ('wait','project','capacity'))"
+                    "UPDATE workflow_sessions SET pause_reason='cold' WHERE role IN ('main','node_core','exploration') AND detached=0 AND (pause_reason IS NULL OR pause_reason IN ('wait','project','capacity'))"
                 )
             else:
                 raise ValidationError(f"Unknown workflow action {action}")
@@ -551,4 +574,7 @@ class WorkflowStore:
                 result["in_progress"] += 1
             else:
                 result["missing"] += 1
+        result["coverage_incomplete"] = int(
+            db.execute("SELECT COUNT(*) FROM usage_coverage_gaps WHERE state='open'").fetchone()[0]
+        )
         return result

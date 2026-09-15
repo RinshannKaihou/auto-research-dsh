@@ -191,7 +191,7 @@ class ProjectRegistry:
 
 
 class NativeService:
-    """Private schema-4 research service. It never invokes a model or schedules work."""
+    """Private schema-5 research service. It never invokes a model or schedules work."""
 
     def __init__(self, registry: str | Path):
         self.registry = ProjectRegistry(registry)
@@ -555,7 +555,7 @@ class NativeService:
         method = request.get("method")
         if method == "capabilities":
             value = {
-                "schema_version": 4,
+                "schema_version": 5,
                 "execution_owner": "dsh",
                 "model_loop": "native-goals",
                 "manual_research": True,
@@ -651,6 +651,7 @@ class NativeService:
                 "close_node",
                 "memory_write",
                 "specialist_create",
+                "consume",
             }
             if (
                 role
@@ -703,6 +704,28 @@ class NativeService:
                 value = self.restore_preview(store, root, request["snapshot_id"], session_id)
             elif method == "host_events":
                 value = []
+                for event in request.get("events", []):
+                    facts = event.get("facts", {})
+                    goal = facts.get("goal") if event.get("event_type") == "goal/change" else None
+                    if not isinstance(goal, dict) or not goal.get("id"):
+                        continue
+                    with store._read() as db:
+                        owner = db.execute(
+                            "SELECT goal_id FROM workflow_sessions WHERE session_id=?",
+                            (session_id,),
+                        ).fetchone()
+                    if owner and owner["goal_id"] == goal["id"]:
+                        store.own_goal(
+                            host_id,
+                            session_id,
+                            goal["id"],
+                            goal.get("revision", 0),
+                            goal.get("phase", "unknown"),
+                            f"goal-projection:{session_id}:{event['sequence']}",
+                            activation=goal.get("activation"),
+                            change_reason=facts.get("reason"),
+                            source_sequence=event["sequence"],
+                        )
                 for event in request.get("events", []):
                     if event["event_type"] != "assistant/message" or not event.get("facts", {}).get(
                         "usage"
@@ -880,7 +903,7 @@ class NativeService:
                 else:
                     raise ValueError("memory_write action must be record, revise, or checkpoint")
             elif method == "specialist_create":
-                if not role or role["role"] not in {"main", "exploration"}:
+                if not role or role["role"] not in {"main", "node_core", "exploration"}:
                     raise ValueError("Only managed research agents may delegate specialists")
                 with store._connection() as db:
                     association = store._association(db, host_id, session_id)
@@ -939,11 +962,23 @@ class NativeService:
                     request.get("why_now"),
                     request.get("plan"),
                     self._operation(request),
-                    request.get("inputs", []),
+                    request.get("inputs"),
                     request.get("purpose", "explore"),
                     request.get("strategy", "continue"),
                     request.get("anchor_ref"),
                     request.get("question_ref"),
+                    request.get("root_reason"),
+                    request.get("predecessors"),
+                    enforce_protocol=bool(request.get("model_call")),
+                )
+            elif method == "consume":
+                value = store.consume(
+                    host_id,
+                    session_id,
+                    request.get("source_ref"),
+                    request.get("use"),
+                    request.get("relation_type", "adopts"),
+                    self._operation(request),
                 )
             elif method == "focus":
                 value = store.focus(
@@ -1034,6 +1069,15 @@ class NativeService:
                     request.get("details", {}),
                     self._operation(request),
                 )
+            elif method == "usage_gap":
+                value = store.record_usage_gap(
+                    request.get("source_key"),
+                    session_id,
+                    request.get("purpose", "conversation"),
+                    request.get("reason"),
+                    request.get("details", {}),
+                    self._operation(request),
+                )
             elif method == "own_goal":
                 value = store.own_goal(
                     host_id,
@@ -1042,6 +1086,9 @@ class NativeService:
                     request.get("revision"),
                     request.get("phase"),
                     self._operation(request),
+                    activation=request.get("activation"),
+                    change_reason=request.get("change_reason"),
+                    source_sequence=request.get("source_sequence"),
                 )
             elif method == "snapshot":
                 operation_id = self._operation(request)

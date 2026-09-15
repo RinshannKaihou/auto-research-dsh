@@ -21,6 +21,9 @@ COLLECTIONS = {
     "notes": ("notes", "rowid"),
     "publications": ("publications", "rowid"),
     "relations": ("relations", "rowid"),
+    "dependencies": ("node_dependencies", "rowid"),
+    "consumptions": ("material_consumptions", "rowid"),
+    "usage_gaps": ("usage_coverage_gaps", "rowid"),
     "legacy_refs": ("legacy_refs", "rowid"),
     "snapshots": ("snapshots", "rowid"),
     "restorations": ("restorations", "rowid"),
@@ -52,6 +55,11 @@ class QueryStore:
         if collection == "nodes":
             value["inputs"] = json.loads(value["inputs"])
         elif collection == "attempts":
+            value["details"] = json.loads(value["details"])
+        elif collection == "dependencies":
+            value["input_refs"] = json.loads(value["input_refs"])
+            value["scheduling"] = bool(value["scheduling"])
+        elif collection == "usage_gaps":
             value["details"] = json.loads(value["details"])
         elif collection == "publications":
             value["gaps"] = json.loads(value["gaps"])
@@ -117,6 +125,9 @@ class QueryStore:
             "notes": value.get("note_id"),
             "publications": f"pub/{value.get('publication_id')}",
             "relations": value.get("relation_id"),
+            "dependencies": value.get("dependency_id"),
+            "consumptions": value.get("consumption_id"),
+            "usage_gaps": value.get("gap_id"),
             "legacy_refs": value.get("ref"),
             "snapshots": value.get("snapshot_id"),
             "restorations": value.get("restoration_id"),
@@ -442,7 +453,7 @@ class QueryStore:
                 )
             ]
             return {
-                "schema_version": 4,
+                "schema_version": 5,
                 "project": project,
                 "association": dict(association) if association else None,
                 "attempt": {**dict(attempt), "details": json.loads(attempt["details"])}
@@ -452,6 +463,15 @@ class QueryStore:
                 "workflow": workflow,
                 "usage": usage_value,
                 "specialists": specialists,
+                "review_queue": {
+                    "pending_total": int(
+                        db.execute("SELECT COUNT(*) FROM review_todos WHERE state='pending'").fetchone()[0]
+                    ),
+                    "running_total": int(
+                        db.execute("SELECT COUNT(*) FROM review_todos WHERE state='running'").fetchone()[0]
+                    ),
+                    "semantics": "advisory-consolidation-queue",
+                },
                 "counts": {
                     collection: int(db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
                     for collection, (table, _) in COLLECTIONS.items()

@@ -1,4 +1,4 @@
-"""Schema-4 domain store for the native DSH research plugin.
+"""Schema-5 domain store for the native DSH research plugin.
 
 DSH owns model execution, tools, sessions, and transcripts.  This module only
 owns research metadata, immutable publications, observations, and idempotency.
@@ -19,9 +19,10 @@ from uuid import uuid4
 from .errors import ConflictError, NotFoundError, ValidationError
 from .memory_store import MemoryStore, migrate_schema4, parse_knowledge_ref
 from .query_store import QueryStore
+from .schema5 import SCHEMA5_DDL, ensure_schema5_columns, migrate_schema5
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 ATTEMPT_STATES = frozenset({"open", "finished", "stopped", "unknown"})
 NODE_STATES = frozenset({"proposed", "open", "closed"})
 
@@ -70,7 +71,7 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
         if readonly:
             with self._connection() as db:
                 if db.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
-                    raise ValidationError("Read-only view requires schema 4")
+                    raise ValidationError("Read-only view requires schema 5")
             return
         self.meta.mkdir(parents=True, exist_ok=True)
         if self.db_path.exists():
@@ -82,6 +83,9 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
             if version == 3:
                 migrate_schema4(self.db_path)
                 version = 4
+            if version == 4:
+                migrate_schema5(self.db_path)
+                version = 5
             if version not in {0, SCHEMA_VERSION}:
                 raise ValidationError(
                     f"Schema {version} must be migrated before native plugin writes"
@@ -107,6 +111,7 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
                 node_id TEXT PRIMARY KEY, question TEXT NOT NULL, why_now TEXT NOT NULL,
                 plan TEXT NOT NULL, inputs TEXT NOT NULL, purpose TEXT NOT NULL,
                 strategy TEXT NOT NULL, anchor_ref TEXT, question_ref TEXT,
+                origin_kind TEXT, root_reason TEXT,
                 status TEXT NOT NULL,
                 created_at TEXT NOT NULL, closed_at TEXT
             );
@@ -159,7 +164,8 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
             CREATE TABLE IF NOT EXISTS relations (
                 relation_id TEXT PRIMARY KEY, source_ref TEXT NOT NULL,
                 target_ref TEXT NOT NULL, label TEXT NOT NULL, note TEXT NOT NULL,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL, relation_type TEXT NOT NULL DEFAULT 'scientific',
+                scheduling INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS legacy_refs (
                 ref TEXT PRIMARY KEY, node_id TEXT,
@@ -199,7 +205,8 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
             CREATE TABLE IF NOT EXISTS owned_goals (
                 association_id TEXT PRIMARY KEY REFERENCES associations(association_id),
                 goal_id TEXT NOT NULL, revision INTEGER NOT NULL,
-                phase TEXT NOT NULL, updated_at TEXT NOT NULL
+                phase TEXT NOT NULL, updated_at TEXT NOT NULL,
+                activation TEXT, change_reason TEXT, source_sequence INTEGER
             );
             CREATE TABLE IF NOT EXISTS events (
                 event_id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL,
@@ -212,7 +219,7 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
             CREATE TABLE IF NOT EXISTS counters (
                 name TEXT PRIMARY KEY, value INTEGER NOT NULL
             );
-            PRAGMA user_version=4;
+            PRAGMA user_version=5;
             """
         )
         db.executescript(DDL)
@@ -234,7 +241,11 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
                 "ALTER TABLE publication_items ADD COLUMN knowledge_refs TEXT NOT NULL DEFAULT '[]'"
             )
         MemoryStore._create_memory_schema(db)
-        db.execute("PRAGMA user_version=4")
+        ensure_schema5_columns(db)
+        for statement in SCHEMA5_DDL.split(";"):
+            if statement.strip():
+                db.execute(statement)
+        db.execute("PRAGMA user_version=5")
 
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
@@ -438,11 +449,62 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
         strategy: str = "continue",
         anchor_ref: str | None = None,
         question_ref: str | None = None,
+        root_reason: str | None = None,
+        predecessors: list[dict] | None = None,
+        *,
+        enforce_protocol: bool = False,
     ) -> dict:
-        if inputs is None:
-            inputs = []
+        supplied_inputs = inputs is not None
+        inputs = [] if inputs is None else inputs
         if not isinstance(inputs, list) or not all(isinstance(item, str) for item in inputs):
             raise ValidationError("inputs must be research reference strings")
+        if root_reason is not None:
+            root_reason = _text(root_reason, "root_reason")
+        predecessors = [] if predecessors is None else predecessors
+        if not isinstance(predecessors, list) or not all(
+            isinstance(item, dict) for item in predecessors
+        ):
+            raise ValidationError("predecessors must be a list of declarations")
+        if root_reason and predecessors:
+            raise ValidationError("Choose exactly one of root_reason or predecessors")
+        if enforce_protocol and not (root_reason or predecessors):
+            raise ValidationError("Choose exactly one of root_reason or predecessors")
+        fixed_inputs: list[str] = []
+        normalized_predecessors = []
+        seen_dependencies = set()
+        for index, predecessor in enumerate(predecessors):
+            node_id = _text(predecessor.get("node_id"), f"predecessors[{index}].node_id")
+            relation_type = predecessor.get("relation_type")
+            if relation_type not in {"depends_on", "branches_from", "revises"}:
+                raise ValidationError("predecessor relation_type is not allowed")
+            rationale = _text(
+                predecessor.get("rationale"), f"predecessors[{index}].rationale"
+            )
+            refs = predecessor.get("input_refs")
+            if not isinstance(refs, list) or not refs or not all(
+                isinstance(ref, str) and ref.strip() for ref in refs
+            ):
+                raise ValidationError("predecessor input_refs must be nonempty reference lists")
+            key = (node_id, relation_type)
+            if key in seen_dependencies:
+                raise ValidationError("Duplicate predecessor declaration")
+            seen_dependencies.add(key)
+            refs = [ref.strip() for ref in refs]
+            normalized_predecessors.append(
+                {
+                    "node_id": node_id,
+                    "relation_type": relation_type,
+                    "rationale": rationale,
+                    "input_refs": refs,
+                }
+            )
+            for ref in refs:
+                if ref not in fixed_inputs:
+                    fixed_inputs.append(ref)
+        if predecessors:
+            if supplied_inputs and inputs != fixed_inputs:
+                raise ValidationError("inputs must exactly match predecessor input_refs")
+            inputs = fixed_inputs
         if strategy not in {"continue", "redirect", "anchor"}:
             raise ValidationError("strategy must be continue, redirect, or anchor")
         if strategy == "anchor" and not anchor_ref:
@@ -456,6 +518,9 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
             "strategy": strategy,
             "anchor_ref": anchor_ref,
             "question_ref": question_ref,
+            "origin_kind": "root" if root_reason else "derived" if predecessors else "legacy_unresolved",
+            "root_reason": root_reason,
+            "predecessors": normalized_predecessors,
         }
 
         def work(db: sqlite3.Connection) -> dict:
@@ -504,10 +569,22 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
                 self._require_ref(db, ref)
             if anchor_ref:
                 self._require_ref(db, anchor_ref)
+            for predecessor in normalized_predecessors:
+                if not db.execute(
+                    "SELECT 1 FROM nodes WHERE node_id=?", (predecessor["node_id"],)
+                ).fetchone():
+                    raise NotFoundError(f"Unknown predecessor node: {predecessor['node_id']}")
+                for ref in predecessor["input_refs"]:
+                    owner = self._ref_node_id(db, ref)
+                    if owner != predecessor["node_id"]:
+                        raise ValidationError(
+                            f"Input {ref} is not owned by predecessor {predecessor['node_id']}"
+                        )
             db.execute(
                 "INSERT INTO nodes "
                 "(node_id,question,why_now,plan,inputs,purpose,strategy,anchor_ref,question_ref,"
-                "status,created_at,closed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                "origin_kind,root_reason,status,created_at,closed_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     value["node_id"],
                     value["question"],
@@ -518,6 +595,8 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
                     value["strategy"],
                     value["anchor_ref"],
                     value["question_ref"],
+                    value["origin_kind"],
+                    value["root_reason"],
                     value["status"],
                     value["created_at"],
                     value["closed_at"],
@@ -531,10 +610,79 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
                 "UPDATE knowledge_entries SET node_id=COALESCE(node_id,?) WHERE knowledge_id=?",
                 (node_id, kid),
             )
+            for predecessor in normalized_predecessors:
+                dependency = {
+                    "dependency_id": self._next(db, "dependency", "D"),
+                    "predecessor_node_id": predecessor["node_id"],
+                    "successor_node_id": node_id,
+                    "relation_type": predecessor["relation_type"],
+                    "rationale": predecessor["rationale"],
+                    "input_refs": predecessor["input_refs"],
+                    "scheduling": predecessor["relation_type"] == "depends_on",
+                    "created_at": value["created_at"],
+                }
+                db.execute(
+                    "INSERT INTO node_dependencies VALUES (?,?,?,?,?,?,?,?)",
+                    (
+                        dependency["dependency_id"],
+                        dependency["predecessor_node_id"],
+                        dependency["successor_node_id"],
+                        dependency["relation_type"],
+                        dependency["rationale"],
+                        _json(dependency["input_refs"]),
+                        int(dependency["scheduling"]),
+                        dependency["created_at"],
+                    ),
+                )
             self._event(db, "node.proposed", value)
             return value
 
         return self._mutate("propose", payload, request_id, work)
+
+    def consume(
+        self,
+        host_id: str,
+        session_id: str,
+        source_ref: str,
+        use: str,
+        relation_type: str,
+        request_id: str,
+    ) -> dict:
+        if relation_type not in {"adopts", "supports", "contradicts", "context"}:
+            raise ValidationError("material relation_type is not allowed")
+        payload = {
+            "host_id": _text(host_id, "host_id"),
+            "session_id": _text(session_id, "session_id"),
+            "source_ref": _text(source_ref, "source_ref"),
+            "use": _text(use, "use"),
+            "relation_type": relation_type,
+        }
+
+        def work(db: sqlite3.Connection) -> dict:
+            association = self._association(db, host_id, session_id)
+            attempt = self._attempt(db, association["association_id"])
+            if not attempt["node_id"]:
+                raise ConflictError("Material consumption requires a node work segment")
+            self._require_ref(db, payload["source_ref"])
+            value = {
+                "consumption_id": self._next(db, "consumption", "C"),
+                "operation_id": request_id,
+                "node_id": attempt["node_id"],
+                "attempt_id": attempt["attempt_id"],
+                "association_id": association["association_id"],
+                "source_ref": payload["source_ref"],
+                "use_text": payload["use"],
+                "relation_type": relation_type,
+                "created_at": _now(),
+            }
+            db.execute(
+                "INSERT INTO material_consumptions VALUES (?,?,?,?,?,?,?,?,?)",
+                tuple(value.values()),
+            )
+            self._event(db, "material.consumed", value)
+            return value
+
+        return self._mutate("consume", payload, request_id, work)
 
     def focus(
         self,
@@ -887,7 +1035,12 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
                 **payload,
                 "created_at": _now(),
             }
-            db.execute("INSERT INTO relations VALUES (?,?,?,?,?,?)", tuple(value.values()))
+            db.execute(
+                "INSERT INTO relations "
+                "(relation_id,source_ref,target_ref,label,note,created_at,relation_type,scheduling) "
+                "VALUES (?,?,?,?,?,?,'scientific',0)",
+                tuple(value.values()),
+            )
             self._event(db, "relation.created", value)
             return value
 
@@ -921,6 +1074,29 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
             if db.execute(f"SELECT 1 FROM {table} WHERE {column}=?", (ref,)).fetchone():
                 return
         raise NotFoundError(f"Unknown research reference: {ref}")
+
+    @staticmethod
+    def _ref_node_id(db: sqlite3.Connection, ref: str) -> str | None:
+        if ref.startswith("knowledge/"):
+            kid, revision = parse_knowledge_ref(ref)
+            row = db.execute(
+                "SELECT e.node_id FROM knowledge_entries e "
+                "JOIN knowledge_revisions r USING(knowledge_id) "
+                "WHERE e.knowledge_id=? AND r.revision=?",
+                (kid, revision),
+            ).fetchone()
+            return row["node_id"] if row else None
+        if ref.startswith("pub/"):
+            publication_id = ref[4:].partition("#")[0]
+            row = db.execute(
+                "SELECT node_id FROM publications WHERE publication_id=?", (publication_id,)
+            ).fetchone()
+            return row["node_id"] if row else None
+        row = db.execute("SELECT node_id FROM nodes WHERE node_id=?", (ref,)).fetchone()
+        if row:
+            return row["node_id"]
+        row = db.execute("SELECT node_id FROM legacy_refs WHERE ref=?", (ref,)).fetchone()
+        return row["node_id"] if row else None
 
     def close_node(self, node_id: str, request_id: str) -> dict:
         payload = {"node_id": _text(node_id, "node_id")}
@@ -1097,6 +1273,45 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
 
         return self._mutate("finish_usage", payload, request_id, work)
 
+    def record_usage_gap(
+        self,
+        source_key: str,
+        session_id: str | None,
+        purpose: str,
+        reason: str,
+        details: dict,
+        request_id: str,
+    ) -> dict:
+        payload = {
+            "source_key": _text(source_key, "source_key"),
+            "session_id": session_id,
+            "purpose": _text(purpose, "purpose"),
+            "reason": _text(reason, "reason"),
+            "details": _copy(details),
+        }
+
+        def work(db: sqlite3.Connection) -> dict:
+            at = _now()
+            value = {
+                "gap_id": str(uuid4()),
+                **payload,
+                "state": "open",
+                "created_at": at,
+                "updated_at": at,
+            }
+            db.execute(
+                "INSERT INTO usage_coverage_gaps VALUES (?,?,?,?,?,?,?,?,?)",
+                (
+                    value["gap_id"], value["source_key"], value["session_id"],
+                    value["purpose"], value["reason"], _json(value["details"]),
+                    value["state"], value["created_at"], value["updated_at"],
+                ),
+            )
+            self._event(db, "usage.coverage-gap", value)
+            return value
+
+        return self._mutate("usage_gap", payload, request_id, work)
+
     def record_snapshot(
         self, host_id: str, session_id: str, manifest: list[dict], complete: bool, request_id: str,
     ) -> dict:
@@ -1258,6 +1473,10 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
         revision: int,
         phase: str,
         request_id: str,
+        *,
+        activation: str | None = None,
+        change_reason: str | None = None,
+        source_sequence: int | None = None,
     ) -> dict:
         payload = {
             "host_id": host_id,
@@ -1265,17 +1484,52 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
             "goal_id": goal_id,
             "revision": int(revision),
             "phase": phase,
+            "activation": activation,
+            "change_reason": change_reason,
+            "source_sequence": source_sequence,
         }
 
         def work(db: sqlite3.Connection) -> dict:
             association = self._association(db, host_id, session_id)
+            existing = db.execute(
+                "SELECT * FROM owned_goals WHERE association_id=?",
+                (association["association_id"],),
+            ).fetchone()
+            if existing and existing["goal_id"] == goal_id:
+                if existing["revision"] > revision:
+                    return dict(existing)
+                if existing["revision"] == revision:
+                    matches = (
+                        existing["phase"] == phase
+                        and (activation is None or existing["activation"] == activation)
+                    )
+                    if not matches:
+                        raise ConflictError("Conflicting values for the same goal revision")
+                    return dict(existing)
+            at = _now()
             db.execute(
-                "INSERT INTO owned_goals VALUES (?,?,?,?,?) ON CONFLICT(association_id) "
+                "INSERT INTO owned_goals "
+                "(association_id,goal_id,revision,phase,updated_at,activation,change_reason,source_sequence) "
+                "VALUES (?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(association_id) "
                 "DO UPDATE SET goal_id=excluded.goal_id,revision=excluded.revision,"
-                "phase=excluded.phase,updated_at=excluded.updated_at",
-                (association["association_id"], goal_id, revision, phase, _now()),
+                "phase=excluded.phase,updated_at=excluded.updated_at,activation=excluded.activation,"
+                "change_reason=excluded.change_reason,source_sequence=excluded.source_sequence",
+                (
+                    association["association_id"], goal_id, revision, phase, at,
+                    activation, change_reason, source_sequence,
+                ),
             )
-            return {"association_id": association["association_id"], **payload}
+            db.execute(
+                "UPDATE workflow_sessions SET goal_id=?,goal_revision=? WHERE session_id=?",
+                (goal_id, revision, session_id),
+            )
+            return dict(
+                db.execute(
+                    "SELECT * FROM owned_goals WHERE association_id=?",
+                    (association["association_id"],),
+                ).fetchone()
+            )
 
         return self._mutate("own_goal", payload, request_id, work)
 

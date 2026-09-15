@@ -4,7 +4,7 @@ export function agentIdentity(agent, hostId = 'local') {
   return { host_id: hostId, session_id: String(agent.id ?? agent.session?.header?.id) };
 }
 export function operationId(agent, suffix = randomUUID()) { return `${agent.id}:${suffix}`; }
-const managed = row => !!row && !row.detached && ['main', 'exploration'].includes(row.role);
+const managed = row => !!row && !row.detached && ['main', 'node_core', 'exploration'].includes(row.role);
 const terminal = state => ['finished', 'failed', 'cancelled'].includes(state);
 
 /** Domain orchestration runs exclusively on native DSH agents, goals and jobs. */
@@ -26,6 +26,7 @@ export class ResearchDomain {
     this.pendingSpecialists = new Map();
     this.specialistHandles = new Map();
     this.associatedSessions = new Set();
+    this.sessionRoles = new Map();
   }
   identity(agent) { return agentIdentity(agent, this.hostId); }
   request(agent, method, fields = {}, id) {
@@ -42,6 +43,9 @@ export class ResearchDomain {
     }
     await this.loaded.get(key);
     state = await this.request(agent, 'control_state');
+    if (state.workflow.session && !state.workflow.session.detached) {
+      this.sessionRoles.set(agent.id, state.workflow.session.role);
+    } else this.sessionRoles.delete(agent.id);
     let cursors = state.workflow.cursors ?? {};
     while (all && Object.keys(cursors).length) {
       const page = await this.request(agent, 'workflow_page', { cursors });
@@ -54,6 +58,10 @@ export class ResearchDomain {
     }
     this.associatedSessions.add(agent.id);
     return state;
+  }
+  managedRole(agent) {
+    const role = this.sessionRoles.get(agent?.id);
+    return ['main', 'node_core', 'exploration'].includes(role) ? role : null;
   }
   async serial(agent, fn) {
     const state = await this.state(agent), key = state.project.project_id;
@@ -192,7 +200,7 @@ export class ResearchDomain {
     const current = this.ctx.goals.get(agent), owned = this.owned(agent, state);
     if (current && !owned) throw new Error('This session already has a non-plugin native goal');
     if (state.attempt?.state === 'unknown') throw new Error('旧执行尚未核实退出');
-    if (!state.attempt) await this.request(agent, 'focus', { node_id: row.node_id, role: row.role === 'exploration' ? 'branch' : 'planner', mode: 'auto' }, `${id}:attempt`);
+    if (!state.attempt) await this.request(agent, 'focus', { node_id: row.node_id, role: ['node_core','exploration'].includes(row.role) ? 'core' : 'planner', mode: 'auto' }, `${id}:attempt`);
     const taskRow = state.workflow.tasks.find(t => t.session_id === agent.id);
     const task = taskRow ? { ...taskRow, context: await this.request(agent, 'task_context', { task_id: taskRow.task_id }) } : null;
     const objective = task ? `Research task ${task.task_id}: ${task.context.question}\nPlan: ${task.context.plan}\nFixed inputs: ${JSON.stringify(task.context.inputs)}\nReport partial publications, gaps, and completion to the initiating agent.` : `Advance research project: ${state.project.goal}`;
@@ -207,7 +215,13 @@ export class ResearchDomain {
     } else goal = current;
     this.lastOwnedGoal.set(agent.id, goal.id);
     await this.workflow(agent, 'session', { goal_id: goal.id, goal_revision: goal.revision }, `${id}:owner`);
-    await this.request(agent, 'own_goal', { goal_id: goal.id, revision: goal.revision, phase: goal.phase }, `${id}:goal`);
+    await this.request(agent, 'own_goal', {
+      goal_id: goal.id,
+      revision: goal.revision,
+      phase: goal.phase,
+      activation: goal.activation,
+      change_reason: restart ? 'restart' : 'arm',
+    }, `${id}:goal`);
     return goal;
   }
   async auto(agent, id = operationId(agent)) {
@@ -454,10 +468,71 @@ export class ResearchDomain {
       return { waiting: taskIds, message: 'Native continuation paused. The current turn ends at the next step boundary; progress arrives through the plugin inbox.' };
     });
   }
+  async requestClose(agent, details = {}, id = operationId(agent), { allowMain = false } = {}) {
+    const state = await this.state(agent), row = state.workflow.session;
+    if (!managed(row)) throw new Error('Only managed research executors have work segments');
+    if (row.role === 'main' && !allowMain) {
+      throw new Error('The main coordinator cannot use research_finish; publish/checkpoint, wait for nodes, or complete its native goal.');
+    }
+    if (!state.attempt) {
+      await this.workflow(agent, 'session', { close_state: 'closed', close_attempt_id: null, close_reason: JSON.stringify(details) }, `${id}:closed-empty`);
+      return { close_state: 'closed', attempt_id: null, message: 'No active research work segment' };
+    }
+    await this.workflow(agent, 'session', {
+      close_state: 'requested', close_attempt_id: state.attempt.attempt_id,
+      close_reason: JSON.stringify(details),
+    }, `${id}:intent`);
+    // Disarm only the node executor's owned continuation after the durable
+    // intent exists.  Otherwise an active native goal can start the next step
+    // before agent/idle gets a chance to verify and close the segment.
+    if (row.role !== 'main') await this.pauseSession(agent, 'closing', `${id}:closing`);
+    return { close_state: 'requested', attempt_id: state.attempt.attempt_id, message: 'Close requested; finalization waits for native tools and owned jobs to exit.' };
+  }
+  async finalizeClose(agent, verify = false, id = operationId(agent)) {
+    let state = await this.state(agent), row = state.workflow.session;
+    if (!row || !['requested','unverified'].includes(row.close_state)) return null;
+    if (!this.quiet(agent) || !this.recoveryClear(agent, state)) {
+      if (row.close_state !== 'unverified') {
+        await this.workflow(agent, 'session', { close_state: 'unverified' }, `${id}:unverified`);
+      }
+      return { close_state: 'unverified', attempt_id: row.close_attempt_id };
+    }
+    if (row.close_state === 'unverified' && !verify) {
+      return { close_state: 'unverified', attempt_id: row.close_attempt_id };
+    }
+    if (state.attempt && state.attempt.attempt_id !== row.close_attempt_id) {
+      await this.workflow(agent, 'session', { close_state: 'unverified', close_reason: 'attempt identity changed before close verification' }, `${id}:identity`);
+      return { close_state: 'unverified', attempt_id: row.close_attempt_id };
+    }
+    if (row.role !== 'main') await this.pauseSession(agent, 'segment_complete', `${id}:pause-core`);
+    if (state.attempt) {
+      await this.request(agent, 'finish', { state: 'finished', details: { reason: 'verified-work-segment-close', close_reason: row.close_reason } }, `${id}:finish`);
+    }
+    await this.workflow(agent, 'session', {
+      close_state: 'closed', close_attempt_id: row.close_attempt_id,
+      pause_reason: row.role === 'main' ? 'complete' : 'segment_complete',
+    }, `${id}:closed`);
+    state = await this.state(agent);
+    return { close_state: 'closed', attempt_id: row.close_attempt_id, task: state.workflow.tasks.find(t => t.session_id === agent.id) ?? null };
+  }
+  async verifyClose(agent, sessionId, id = operationId(agent)) {
+    return this.serial(agent, async () => {
+      const target = await this.adapter.resolve(sessionId);
+      const state = await this.state(target);
+      if (!managed(state.workflow.session)) throw new Error('Target is not a managed research executor');
+      if (!['requested','unverified'].includes(state.workflow.session.close_state)) throw new Error('Target has no close intent to verify');
+      const result = await this.finalizeClose(target, true, id);
+      if (result?.close_state !== 'closed') throw new Error('Native tools or owned jobs have not exited; close remains unverified');
+      await this.schedule(agent);
+      return result;
+    });
+  }
   async schedule(agent) {
     let state = await this.state(agent);
-    let slots = state.workflow.tasks.filter(t => ['starting','unverified'].includes(t.state) && !state.workflow.sessions.some(s => s.session_id === t.session_id)).length;
+    const taskSessions = new Set(state.workflow.tasks.map(task => task.session_id));
+    let slots = state.workflow.tasks.filter(t => ['starting','running','waiting','stopping','unverified'].includes(t.state)).length;
     for (const row of state.workflow.sessions.filter(managed)) {
+      if (taskSessions.has(row.session_id)) continue;
       const target = this.ctx.agents.get(row.session_id);
       if (!target) { if (!row.pause_reason) slots++; continue; }
       if (!this.quiet(target) || (!row.pause_reason && this.owned(target,state)?.phase === 'active')) slots++;
@@ -484,14 +559,25 @@ export class ResearchDomain {
     for (const task of state.workflow.tasks.filter(t => t.state === 'queued')) {
       if (slots >= this.autonomousConcurrency) break;
       const parent = await this.adapter.resolve(task.parent_session_id);
-      await this.workflow(agent, 'task_state', { task_id: task.task_id, state: 'starting' }, `${task.task_id}:starting`);
+      await this.workflow(agent, 'task_state', { task_id: task.task_id, state: 'starting' }, `${task.task_id}:${task.updated_at}:starting`);
       try {
-        const prepared = await this.request(parent, 'prepare_branch', { node_id: task.node_id }, `${task.task_id}:prepare`);
-        const child = await this.createSession(parent, task.session_id, prepared.workspace);
-        const context = await this.request(parent, 'task_context', { task_id: task.task_id });
-        await this.request(child, 'open', { root: state.project_root, cwd: prepared.workspace, session_role: 'exploration', node_id: task.node_id, context }, `${task.task_id}:open`);
-        await this.workflow(child, 'task_state', { task_id: task.task_id, state: 'running', cwd: prepared.workspace }, `${task.task_id}:running`);
-        await this.arm(child, await this.state(child), `${task.task_id}:arm`);
+        let child, workspace;
+        if (task.cwd) {
+          child = await this.adapter.resolve(task.session_id);
+          workspace = task.cwd;
+          const current = await this.state(child);
+          if (child.session.header.cwd !== workspace || !this.quiet(child) || !this.recoveryClear(child, current)) {
+            throw new Error('Persistent node core is not quiet in its recorded workspace');
+          }
+        } else {
+          const prepared = await this.request(parent, 'prepare_branch', { node_id: task.node_id }, `${task.task_id}:prepare`);
+          workspace = prepared.workspace;
+          child = await this.createSession(parent, task.session_id, workspace);
+          const context = await this.request(parent, 'task_context', { task_id: task.task_id });
+          await this.request(child, 'open', { root: state.project_root, cwd: workspace, session_role: 'node_core', node_id: task.node_id, context }, `${task.task_id}:open`);
+        }
+        await this.workflow(child, 'task_state', { task_id: task.task_id, state: 'running', cwd: workspace }, `${task.task_id}:${task.updated_at}:running`);
+        await this.arm(child, await this.state(child), `${task.task_id}:arm:${task.updated_at}`);
         slots++;
       } catch (error) {
         await this.workflow(agent, 'task_state', { task_id: task.task_id, state: 'unverified', error: error.message });
@@ -507,12 +593,11 @@ export class ResearchDomain {
   async progress(agent, kind, value, id) {
     const state = await this.state(agent);
     const task = state.workflow.tasks.find(t => t.session_id === agent.id);
-    if (kind === 'finished') await this.pauseSession(agent, 'finished');
+    if (kind === 'finished' && task) await this.pauseSession(agent, 'segment_complete');
     if (task && !terminal(task.state)) {
       await this.workflow(agent, 'notify', { key: value.publication_id ?? value.attempt_id ?? id, kind, reference: value.publication_id ? `pub/${value.publication_id}` : null, summary: value.summary ?? '', gaps: value.gaps ?? [] }, `${id}:notice`);
       if (kind === 'failed') await this.workflow(agent, 'task_state', { task_id: task.task_id, state: 'failed', error: value.summary }, `${id}:failed`);
       if (kind === 'finished') {
-        await this.pauseSession(agent, 'finished');
         await this.workflow(agent, 'task_state', { task_id: task.task_id, state: 'finished' }, `${id}:task`);
       }
     }
@@ -594,7 +679,11 @@ export class ResearchDomain {
     }
   }
   async idle(agent) {
-    return this.serial(agent, async () => { await this.settleStops(agent, false); await this.schedule(agent); });
+    return this.serial(agent, async () => {
+      await this.settleStops(agent, false);
+      await this.finalizeClose(agent, false);
+      await this.schedule(agent);
+    });
   }
   async createSession(parent, sessionId, cwd) {
     let child = this.ctx.agents.get(sessionId);

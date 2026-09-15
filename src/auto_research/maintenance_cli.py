@@ -34,7 +34,7 @@ def parser() -> argparse.ArgumentParser:
     migration.add_argument("--no-files", action="store_true")
 
     commands.add_parser("validate", help="Read-only SQLite integrity and schema validation")
-    export = commands.add_parser("export", help="Export a schema-4 state view as JSON")
+    export = commands.add_parser("export", help="Export a schema-5 state view as JSON")
     export.add_argument("--output", type=Path, required=True)
     return app
 
@@ -59,7 +59,7 @@ def validate_project(root: Path) -> dict:
             name = row[0]
             quoted = name.replace('"', '""')
             tables[name] = int(db.execute(f'SELECT count(*) FROM "{quoted}"').fetchone()[0])
-    supported = version in {1, 2, 3, 4}
+    supported = version in {1, 2, 3, 4, 5}
     return {
         "root": str(root),
         "schema_version": version,
@@ -77,15 +77,15 @@ def execute(args: argparse.Namespace) -> dict:
         return validate_project(root)
     if args.command == "export":
         result = validate_project(root)
-        if result["schema_version"] != 4 or not result["ok"]:
-            raise ValueError("Export requires a valid schema-4 project")
+        if result["schema_version"] != 5 or not result["ok"]:
+            raise ValueError("Export requires a valid schema-5 project")
         output = args.output.expanduser().resolve()
         if output.exists():
             raise ValueError("Export output must not already exist")
         output.parent.mkdir(parents=True, exist_ok=True)
         state = redact(NativeStore(root, readonly=True).query())
         output.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n")
-        return {"output": str(output), "schema_version": 4}
+        return {"output": str(output), "schema_version": 5}
     if args.command == "migration":
         if args.action == "recovery-preview":
             if not args.attempt:

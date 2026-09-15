@@ -38,6 +38,19 @@ export function projectGraph(state) {
     if (!edges.has(id)) edges.set(id,{id,source,target,records:[]});
     edges.get(id).records.push(record);
   }
+  const incomingDependencies = new Map();
+  for (const dependency of state.dependencies ?? []) {
+    const source = nodes.has(dependency.predecessor_node_id) ? dependency.predecessor_node_id : null;
+    const target = nodes.has(dependency.successor_node_id) ? dependency.successor_node_id : null;
+    const record = {...dependency,kind:'dependency',source,target,label:dependency.relation_type};
+    if (target) {
+      const list=incomingDependencies.get(target)??[];list.push(record);incomingDependencies.set(target,list);
+      nodes.get(target).relations.push(record);
+    }
+    if (source) nodes.get(source).relations.push(record);
+    if (!source || !target) planning.relations.push(record);
+    link(source,target,record);
+  }
   for (const n of nodes.values()) {
     for (const [kind,refs] of [['input',n.inputs ?? []],['anchor',n.anchor_ref ? [n.anchor_ref] : []],['question',n.question_ref ? [n.question_ref] : []]]) {
       for (const ref of refs) {
@@ -56,6 +69,15 @@ export function projectGraph(state) {
     link(source,target,record);
   }
   const edgeList = [...edges.values()].sort((a,b) => a.id.localeCompare(b.id));
+  for (const node of nodes.values()) {
+    node.origin_class = node.origin_kind === 'root' && node.root_reason
+      ? 'explicit_root'
+      : node.origin_kind === 'legacy_unresolved'
+        ? 'legacy_unresolved'
+        : node.origin_kind === 'derived' && (incomingDependencies.get(node.node_id)?.length ?? 0) > 0
+          ? 'derived'
+          : 'protocol_violation';
+  }
   return {nodes:[...nodes.values()],edges:edgeList,planning,resolve,
     structuralKey:JSON.stringify([ordered.map(n => [n.node_id,n.created_at]),edgeList.map(e => [e.source,e.target])])};
 }

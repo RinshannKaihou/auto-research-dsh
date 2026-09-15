@@ -13,6 +13,13 @@ export function eventFacts(event) {
     if (['string','number','boolean'].includes(typeof data[key])) facts[key] = data[key];
   }
   if (event.type === 'assistant/message' && data.usage) facts.usage = data.usage;
+  if (event.type === 'goal/change' && data.goal && typeof data.goal === 'object') {
+    const goal = {};
+    for (const key of ['id','revision','phase','activation']) {
+      if (['string','number','boolean'].includes(typeof data.goal[key])) goal[key] = data.goal[key];
+    }
+    if (goal.id) facts.goal = goal;
+  }
   return facts;
 }
 export function registerResearchEvents(ctx, domain) {
@@ -111,7 +118,7 @@ export function registerResearchEvents(ctx, domain) {
       blockAuto = step === 1 && !!goal && !human && (state.workflow.run.state !== 'running' || !!row.pause_reason);
       if (human && goal?.phase === 'active') await domain.pauseSession(agent,'human');
       // A user's turn may proceed even when plugin continuation is paused.
-      reject = !human && ['wait','finished'].includes(row?.pause_reason);
+      reject = !human && ['wait','segment_complete'].includes(row?.pause_reason);
       if (!human && goal?.phase === 'active' && (state.workflow.run.state !== 'running' || row.pause_reason)) {
         ctx.goals.pause(agent,{id:goal.id,revision:goal.revision});
       }
@@ -154,12 +161,18 @@ export function registerResearchEvents(ctx, domain) {
   }));
   disposers.push(ctx.on('goal/changed', ({agent,change}) => {
     if (!change.goal || domain.lastOwnedGoal.get(agent.id) !== change.goal.id) return;
-    if (change.goal.phase === 'complete') void contain(agent,domain.state(agent).then(async state => {
-      await domain.workflow(agent,'session',{pause_reason:'complete'});
-      if (state.workflow.session?.role === 'main') await domain.workflow(agent,'run',{state:'complete'});
-      await domain.progress(agent,'goal_complete',{},`goal:${change.goal.id}:complete`);
+    void contain(agent,domain.request(agent,'own_goal',{
+      goal_id:change.goal.id,revision:change.goal.revision,phase:change.goal.phase,
+      activation:change.goal.activation,change_reason:change.reason,
+    },`goal:${change.goal.id}:${change.goal.revision}`).then(async()=>{
+      if (change.goal.phase === 'complete') {
+        const state=await domain.state(agent);
+        await domain.requestClose(agent,{reason:'owned-goal-complete'},`goal:${change.goal.id}:close`,{allowMain:true});
+        if (state.workflow.session?.role === 'main') await domain.workflow(agent,'run',{state:'complete'});
+        if (agent.status === 'idle') await domain.finalizeClose(agent,true,`goal:${change.goal.id}:finalize`);
+      }
+      if (change.goal.phase === 'blocked') await domain.pauseSession(agent,'host_limit');
     }));
-    if (change.goal.phase === 'blocked') void contain(agent,domain.pauseSession(agent,'host_limit'));
   }));
   if (ctx.jobs) disposers.push(ctx.jobs.onJobsChanged(owner => {
     if (owner) void contain(owner,domain.workflow(owner,'intent',{
@@ -179,7 +192,14 @@ export function registerResearchEvents(ctx, domain) {
       source_key:sourceKey,purpose:options.purpose ?? 'conversation',provider:options.provider,model:options.model,
       turn: options.purpose && options.purpose !== 'conversation' ? undefined : domain.turns.get(agent.id),
       step: options.purpose && options.purpose !== 'conversation' ? undefined : domain.steps?.get(agent.id),
-    },`${sourceKey}:begin`).then(() => {began=true;}).catch(() => {}) : Promise.resolve();
+    },`${sourceKey}:begin`).then(() => {began=true;}).catch(async error => {
+      if (!domain.managedRole(agent)) return;
+      await contain(agent,domain.request(agent,'usage_gap',{
+        source_key:sourceKey,purpose:options.purpose ?? 'conversation',
+        reason:error instanceof Error?error.message:String(error),
+        details:{provider:options.provider,model:options.model,phase:'registration'},
+      },`${sourceKey}:gap`));
+    }) : Promise.resolve();
     return (async function* () {
       await begin;
       try {

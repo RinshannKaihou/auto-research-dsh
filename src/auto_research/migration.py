@@ -1,4 +1,4 @@
-"""Legacy inventory and explicit copy-only migration into schema 4.
+"""Legacy inventory and explicit copy-only migration into the current native schema.
 
 Preflight reads committed SQLite state without reconciling execution. Migration
 creates a new copy, an integrity-checked database backup, and an idempotent
@@ -377,7 +377,7 @@ def migrate_native_copy(source: Path, destination: Path) -> dict:
         state = store.query()
         value = {
             "source_root": str(source),
-            "schema_version": 4,
+            "schema_version": 5,
             "known_usage": state["usage"]["known"],
             "attempt_count": len(state["attempts"]),
             "files": project_file_manifest(temporary, []),
@@ -391,14 +391,14 @@ def migrate_native_copy(source: Path, destination: Path) -> dict:
 
 
 def migrate_copy(source: str | Path, destination: str | Path) -> dict:
-    """Copy a legacy or native project into schema 4 without mutating source."""
+    """Copy a legacy or native project into schema 5 without mutating source."""
     source = Path(source).expanduser().resolve(strict=True)
     destination = Path(destination).expanduser().resolve()
     if destination.is_relative_to(source):
         raise ValueError("Migration destination must be outside the source project")
     with readonly_database(source) as original:
         version = original.execute("PRAGMA user_version").fetchone()[0]
-    if version in {2, 3, 4}:
+    if version in {2, 3, 4, 5}:
         return migrate_native_copy(source, destination)
     marker = destination / ".research" / "migration-schema1-to-2.json"
     if marker.is_file():
@@ -601,7 +601,7 @@ def migrate_copy(source: str | Path, destination: str | Path) -> dict:
             "source_database_sha256": source_db_digest,
             "migrated_at": imported_at,
             "project_id": project["project_id"],
-            "target_schema_version": 4,
+            "target_schema_version": 5,
             "legacy_known_usage": report["budget"]["known_spent"],
             "legacy_unknown_attempts": report["budget"]["unknown_attempts"],
             "file_manifest": report["files"],

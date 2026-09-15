@@ -71,7 +71,7 @@ export function registerResearchTools(ctx, domain) {
     tool(domain, {
       name: 'research_propose',
       method: 'propose',
-      description: 'Propose a research node with fixed publication inputs. In manual mode this records the proposal without dispatching work.',
+      description: 'Atomically propose a node as an independent root with root_reason or a derived node with typed predecessors and fixed input_refs. depends_on controls scheduling; branches_from and revises are scientific lineage only.',
       parameters: {
         question: { type: 'string', required: true },
         why_now: { type: 'string', required: true },
@@ -81,6 +81,20 @@ export function registerResearchTools(ctx, domain) {
         strategy: { type: 'string', enum: ['continue', 'redirect', 'anchor'] },
         anchor_ref: { type: 'string' },
         question_ref: { type: 'string' },
+        root_reason: { type: 'string' },
+        predecessors: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              node_id: { type: 'string', required: true },
+              relation_type: { type: 'string', required: true, enum: ['depends_on', 'branches_from', 'revises'] },
+              rationale: { type: 'string', required: true },
+              input_refs: { type: 'array', required: true, items: { type: 'string' } },
+            },
+          },
+        },
         dispatch: { type: 'boolean' },
       },
       map: args => ({ ...args, dispatch: undefined }),
@@ -90,6 +104,17 @@ export function registerResearchTools(ctx, domain) {
         if (state.project.control !== 'auto') return { node, dispatched: false };
         return { node, dispatched: true, branch: await domain.dispatch(exec.agent, node.node_id, `${id}:dispatch`) };
       },
+    }),
+    tool(domain, {
+      name: 'research_consume',
+      method: 'consume',
+      description: 'Append an idempotent record that the current node attempt adopted a later immutable research reference. This never rewrites the node proposal or its fixed inputs.',
+      parameters: {
+        source_ref: { type: 'string', required: true },
+        use: { type: 'string', required: true },
+        relation_type: { type: 'string', required: true, enum: ['adopts', 'supports', 'contradicts', 'context'] },
+      },
+      map: args => args,
     }),
     tool(domain, {
       name: 'research_memory',
@@ -113,7 +138,7 @@ export function registerResearchTools(ctx, domain) {
           return domain.request(exec.agent, 'memory_write', { action: args.action, fields, model_call: true }, id);
         }
         const state = await domain.state(exec.agent);
-        if (!['main','exploration'].includes(state.workflow.session?.role)) throw new Error('This session cannot start a consolidation reviewer');
+        if (!['main','node_core','exploration'].includes(state.workflow.session?.role)) throw new Error('This session cannot start a consolidation reviewer');
         const nodeId = args.node_id ?? state.attempt?.node_id ?? state.workflow.session?.node_id;
         const todo = await domain.request(exec.agent, 'review_todo_next', { node_id: nodeId });
         if (todo) await domain.request(exec.agent, 'review_todo_state', { todo_id: todo.todo_id, state: 'running' }, `${id}:todo-running`);
@@ -193,13 +218,12 @@ export function registerResearchTools(ctx, domain) {
     }),
     tool(domain, {
       name: 'research_finish',
-      method: 'finish',
-      description: 'Finish the current research work segment without publishing or closing its node.',
+      description: 'Request verified closure of the current node-core work segment after native tools and owned jobs exit. The main coordinator must instead publish/checkpoint, wait, or complete its native goal.',
       parameters: {
         state: { type: 'string', enum: ['finished', 'stopped', 'unknown'] },
         details: { type: 'object', additionalProperties: true, properties: {} },
       },
-      map: args => ({ state: args.state ?? 'finished', details: args.details ?? {} }),
+      invoke: (args, exec, id) => domain.requestClose(exec.agent, { state: args.state ?? 'finished', ...(args.details ?? {}) }, id),
     }),
     tool(domain, {
       name: 'research_close_node',
