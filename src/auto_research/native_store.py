@@ -1,4 +1,4 @@
-"""Schema-2 domain store for the native DSH research plugin.
+"""Schema-3 domain store for the native DSH research plugin.
 
 DSH owns model execution, tools, sessions, and transcripts.  This module only
 owns research metadata, immutable publications, observations, and idempotency.
@@ -19,7 +19,7 @@ from uuid import uuid4
 from .errors import ConflictError, NotFoundError, ValidationError
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 ATTEMPT_STATES = frozenset({"open", "finished", "stopped", "unknown"})
 NODE_STATES = frozenset({"proposed", "open", "closed"})
 
@@ -54,17 +54,29 @@ def _number(value: Any, label: str) -> float:
     return result
 
 
-class NativeStore:
+from .workflow_store import WorkflowStore, DDL, migrate_schema3
+
+
+class NativeStore(WorkflowStore):
     """Transactional store used only by the native DSH plugin."""
 
-    def __init__(self, root: str | Path):
+    def __init__(self, root: str | Path, *, readonly: bool = False):
         self.root = Path(root).expanduser().resolve()
         self.meta = self.root / ".research"
-        self.meta.mkdir(parents=True, exist_ok=True)
+        self.readonly = readonly
         self.db_path = self.meta / "state.sqlite3"
+        if readonly:
+            with self._connection() as db:
+                if db.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
+                    raise ValidationError("Read-only view requires schema 3")
+            return
+        self.meta.mkdir(parents=True, exist_ok=True)
         if self.db_path.exists():
             with sqlite3.connect(self.db_path) as probe:
                 version = int(probe.execute("PRAGMA user_version").fetchone()[0])
+            if version == 2:
+                migrate_schema3(self.db_path)
+                version = 3
             if version not in {0, SCHEMA_VERSION}:
                 raise ValidationError(
                     f"Schema {version} must be migrated before native plugin writes"
@@ -191,28 +203,32 @@ class NativeStore:
             CREATE TABLE IF NOT EXISTS counters (
                 name TEXT PRIMARY KEY, value INTEGER NOT NULL
             );
-            PRAGMA user_version=2;
+            PRAGMA user_version=3;
             """
         )
+        db.executescript(DDL)
         # Schema 2 was developed incrementally before its first release. Keep
         # those local databases readable without inventing another public
         # schema version.
-        node_columns = {
-            row[1] for row in db.execute("PRAGMA table_info(nodes)")
-        }
+        node_columns = {row[1] for row in db.execute("PRAGMA table_info(nodes)")}
         if "strategy" not in node_columns:
             db.execute("ALTER TABLE nodes ADD COLUMN strategy TEXT NOT NULL DEFAULT 'continue'")
         if "anchor_ref" not in node_columns:
             db.execute("ALTER TABLE nodes ADD COLUMN anchor_ref TEXT")
-        item_columns = {
-            row[1] for row in db.execute("PRAGMA table_info(publication_items)")
-        }
+        item_columns = {row[1] for row in db.execute("PRAGMA table_info(publication_items)")}
         if "object_kind" not in item_columns:
             db.execute("ALTER TABLE publication_items ADD COLUMN object_kind TEXT")
 
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
-        db = sqlite3.connect(self.db_path, timeout=30, isolation_level=None)
+        db = sqlite3.connect(
+            self.db_path.as_uri() + "?mode=ro" if self.readonly else self.db_path,
+            uri=self.readonly,
+            timeout=30,
+            isolation_level=None,
+        )
+        if self.readonly:
+            db.execute("PRAGMA query_only=ON")
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA foreign_keys=ON")
         db.execute("PRAGMA busy_timeout=30000")
@@ -266,9 +282,7 @@ class NativeStore:
 
     @staticmethod
     def _next(db: sqlite3.Connection, name: str, prefix: str) -> str:
-        db.execute(
-            "INSERT INTO counters VALUES (?,0) ON CONFLICT(name) DO NOTHING", (name,)
-        )
+        db.execute("INSERT INTO counters VALUES (?,0) ON CONFLICT(name) DO NOTHING", (name,))
         db.execute("UPDATE counters SET value=value+1 WHERE name=?", (name,))
         value = db.execute("SELECT value FROM counters WHERE name=?", (name,)).fetchone()[0]
         return f"{prefix}-{value:03d}"
@@ -276,8 +290,7 @@ class NativeStore:
     @staticmethod
     def _event(db: sqlite3.Connection, kind: str, data: Any) -> None:
         db.execute(
-            "INSERT INTO events(kind,data,created_at) VALUES (?,?,?)",
-            (kind, _json(data), _now()),
+            "INSERT INTO events(kind,data,created_at) VALUES (?,?,?)", (kind, _json(data), _now()),
         )
 
     @staticmethod
@@ -305,8 +318,7 @@ class NativeStore:
     @staticmethod
     def _attempt(db: sqlite3.Connection, association_id: str) -> sqlite3.Row:
         row = db.execute(
-            "SELECT * FROM attempts WHERE association_id=? AND ended_at IS NULL",
-            (association_id,),
+            "SELECT * FROM attempts WHERE association_id=? AND ended_at IS NULL", (association_id,),
         ).fetchone()
         if not row:
             raise NotFoundError("No active research work segment")
@@ -328,8 +340,12 @@ class NativeStore:
             db.execute(
                 "INSERT INTO project VALUES (?,?,?,?,?,?)",
                 (
-                    value["project_id"], value["goal"], 0,
-                    value["control"], _json(value["config"]), value["created_at"],
+                    value["project_id"],
+                    value["goal"],
+                    0,
+                    value["control"],
+                    _json(value["config"]),
+                    value["created_at"],
                 ),
             )
             self._event(db, "project.initialized", value)
@@ -355,12 +371,13 @@ class NativeStore:
             if existing:
                 return dict(existing)
             value = {
-                "association_id": str(uuid4()), **payload, "ended_seq": None,
-                "started_at": _now(), "ended_at": None,
+                "association_id": str(uuid4()),
+                **payload,
+                "ended_seq": None,
+                "started_at": _now(),
+                "ended_at": None,
             }
-            db.execute(
-                "INSERT INTO associations VALUES (?,?,?,?,?,?,?)", tuple(value.values())
-            )
+            db.execute("INSERT INTO associations VALUES (?,?,?,?,?,?,?)", tuple(value.values()))
             self._event(db, "session.associated", value)
             return value
 
@@ -390,9 +407,15 @@ class NativeStore:
         return self._mutate("detach", payload, request_id, work)
 
     def propose(
-        self, question: str, why_now: str, plan: str, request_id: str,
-        inputs: list[str] | None = None, purpose: str = "explore",
-        strategy: str = "continue", anchor_ref: str | None = None,
+        self,
+        question: str,
+        why_now: str,
+        plan: str,
+        request_id: str,
+        inputs: list[str] | None = None,
+        purpose: str = "explore",
+        strategy: str = "continue",
+        anchor_ref: str | None = None,
     ) -> dict:
         if inputs is None:
             inputs = []
@@ -415,8 +438,11 @@ class NativeStore:
         def work(db: sqlite3.Connection) -> dict:
             self._project(db)
             value = {
-                "node_id": self._next(db, "node", "X"), **payload,
-                "status": "proposed", "created_at": _now(), "closed_at": None,
+                "node_id": self._next(db, "node", "X"),
+                **payload,
+                "status": "proposed",
+                "created_at": _now(),
+                "closed_at": None,
             }
             for ref in inputs:
                 self._require_ref(db, ref)
@@ -427,9 +453,16 @@ class NativeStore:
                 "(node_id,question,why_now,plan,inputs,purpose,strategy,anchor_ref,"
                 "status,created_at,closed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (
-                    value["node_id"], value["question"], value["why_now"], value["plan"],
-                    _json(value["inputs"]), value["purpose"], value["strategy"],
-                    value["anchor_ref"], value["status"], value["created_at"],
+                    value["node_id"],
+                    value["question"],
+                    value["why_now"],
+                    value["plan"],
+                    _json(value["inputs"]),
+                    value["purpose"],
+                    value["strategy"],
+                    value["anchor_ref"],
+                    value["status"],
+                    value["created_at"],
                     value["closed_at"],
                 ),
             )
@@ -452,8 +485,12 @@ class NativeStore:
         if mode not in {"manual", "auto"}:
             raise ValidationError("mode must be manual or auto")
         payload = {
-            "host_id": host_id, "session_id": session_id, "node_id": node_id,
-            "role": _text(role, "role"), "mode": mode, "defer": bool(defer),
+            "host_id": host_id,
+            "session_id": session_id,
+            "node_id": node_id,
+            "role": _text(role, "role"),
+            "mode": mode,
+            "defer": bool(defer),
         }
 
         def work(db: sqlite3.Connection) -> dict:
@@ -478,6 +515,8 @@ class NativeStore:
                 )
                 return {"queued": True, "current_attempt_id": live["attempt_id"] if live else None}
             if live:
+                if live["node_id"] == node_id and live["mode"] == mode:
+                    return dict(live)
                 raise ConflictError("Finish the current work segment before changing focus")
             attempt_id = self._next(db, "attempt", "A")
             at = _now()
@@ -501,8 +540,12 @@ class NativeStore:
                     (node_id,),
                 )
             value = {
-                "attempt_id": attempt_id, "association_id": association["association_id"],
-                "node_id": node_id, "role": role, "mode": mode, "state": "open",
+                "attempt_id": attempt_id,
+                "association_id": association["association_id"],
+                "node_id": node_id,
+                "role": role,
+                "mode": mode,
+                "state": "open",
                 "started_at": at,
             }
             self._event(db, "attempt.started", value)
@@ -510,9 +553,7 @@ class NativeStore:
 
         return self._mutate("focus", payload, request_id, work)
 
-    def bind_turn(
-        self, host_id: str, session_id: str, turn: int, request_id: str
-    ) -> dict:
+    def bind_turn(self, host_id: str, session_id: str, turn: int, request_id: str) -> dict:
         payload = {"host_id": host_id, "session_id": session_id, "turn": int(turn)}
 
         def work(db: sqlite3.Connection) -> dict:
@@ -525,20 +566,18 @@ class NativeStore:
             association = self._association(db, host_id, session_id)
             attempt = self._attempt(db, association["association_id"])
             value = {
-                **payload, "association_id": association["association_id"],
-                "attempt_id": attempt["attempt_id"], "node_id": attempt["node_id"],
+                **payload,
+                "association_id": association["association_id"],
+                "attempt_id": attempt["attempt_id"],
+                "node_id": attempt["node_id"],
                 "started_at": _now(),
             }
-            db.execute(
-                "INSERT INTO turn_bindings VALUES (?,?,?,?,?,?,?)", tuple(value.values())
-            )
+            db.execute("INSERT INTO turn_bindings VALUES (?,?,?,?,?,?,?)", tuple(value.values()))
             return value
 
         return self._mutate("bind_turn", payload, request_id, work)
 
-    def note(
-        self, host_id: str, session_id: str, body: str, kind: str, request_id: str
-    ) -> dict:
+    def note(self, host_id: str, session_id: str, body: str, kind: str, request_id: str) -> dict:
         payload = {"body": _text(body, "body"), "kind": _text(kind, "kind")}
 
         def work(db: sqlite3.Connection) -> dict:
@@ -546,7 +585,9 @@ class NativeStore:
             attempt = self._attempt(db, association["association_id"])
             value = {
                 "note_id": self._next(db, "note", "N"),
-                "attempt_id": attempt["attempt_id"], **payload, "created_at": _now(),
+                "attempt_id": attempt["attempt_id"],
+                **payload,
+                "created_at": _now(),
             }
             db.execute("INSERT INTO notes VALUES (?,?,?,?,?)", tuple(value.values()))
             self._event(db, "research.noted", value)
@@ -580,13 +621,42 @@ class NativeStore:
                 "SELECT * FROM focus_queue WHERE association_id=?", (association["association_id"],)
             ).fetchone()
             value = {"attempt_id": attempt["attempt_id"], "state": state, "ended_at": at}
+            self.notify_in_transaction(
+                db,
+                session_id,
+                {
+                    "key": attempt["attempt_id"],
+                    "kind": state,
+                    "summary": details.get("reason", ""),
+                    "gaps": [],
+                },
+            )
+            if attempt["mode"] == "auto":
+                db.execute(
+                    "UPDATE workflow_sessions SET pause_reason=? WHERE session_id=?",
+                    ("finished" if state == "finished" else "stop", session_id),
+                )
+                if state == "finished":
+                    db.execute(
+                        "UPDATE exploration_tasks SET state='finished',updated_at=? WHERE session_id=?",
+                        (at, session_id),
+                    )
             self._event(db, "attempt.finished", value)
             if queued:
                 next_id = self._next(db, "attempt", "A")
                 db.execute(
                     "INSERT INTO attempts VALUES (?,?,?,?,?,?,?,?,?)",
-                    (next_id, association["association_id"], queued["node_id"], queued["role"],
-                     "open", queued["mode"], at, None, "{}"),
+                    (
+                        next_id,
+                        association["association_id"],
+                        queued["node_id"],
+                        queued["role"],
+                        "open",
+                        queued["mode"],
+                        at,
+                        None,
+                        "{}",
+                    ),
                 )
                 db.execute(
                     "DELETE FROM focus_queue WHERE association_id=?",
@@ -626,17 +696,23 @@ class NativeStore:
             if item_id in seen:
                 raise ValidationError(f"Duplicate item_id: {item_id}")
             seen.add(item_id)
-            normalized.append({
-                "item_id": item_id,
-                "kind": _text(raw.get("kind", "product"), "kind"),
-                "content": _copy(raw.get("content", {})),
-                "object_version": raw.get("object_version"),
-                "object_kind": raw.get("object_kind"),
-                "source_path": raw.get("source_path"),
-            })
+            normalized.append(
+                {
+                    "item_id": item_id,
+                    "kind": _text(raw.get("kind", "product"), "kind"),
+                    "content": _copy(raw.get("content", {})),
+                    "object_version": raw.get("object_version"),
+                    "object_kind": raw.get("object_kind"),
+                    "source_path": raw.get("source_path"),
+                }
+            )
         payload = {
-            "host_id": host_id, "session_id": session_id, "status": status,
-            "summary": _text(summary, "summary"), "gaps": gaps, "items": normalized,
+            "host_id": host_id,
+            "session_id": session_id,
+            "status": status,
+            "summary": _text(summary, "summary"),
+            "gaps": gaps,
+            "items": normalized,
         }
 
         def work(db: sqlite3.Connection) -> dict:
@@ -662,11 +738,30 @@ class NativeStore:
                     "INSERT INTO publication_items "
                     "(publication_id,item_id,kind,content,object_version,object_kind,source_path) "
                     "VALUES (?,?,?,?,?,?,?)",
-                    (publication_id, item["item_id"], item["kind"], _json(item["content"]),
-                     item["object_version"], item["object_kind"], item["source_path"]),
+                    (
+                        publication_id,
+                        item["item_id"],
+                        item["kind"],
+                        _json(item["content"]),
+                        item["object_version"],
+                        item["object_kind"],
+                        item["source_path"],
+                    ),
                 )
                 refs.append(f"pub/{publication_id}#{item['item_id']}")
             value = {"publication_id": publication_id, "refs": refs, "created_at": at}
+            self.notify_in_transaction(
+                db,
+                session_id,
+                {
+                    "key": publication_id,
+                    "kind": "published",
+                    "reference": f"pub/{publication_id}",
+                    "summary": summary,
+                    "gaps": gaps,
+                    "refs": refs,
+                },
+            )
             self._event(db, "publication.created", value)
             return value
 
@@ -686,7 +781,8 @@ class NativeStore:
             self._require_ref(db, source_ref)
             self._require_ref(db, target_ref)
             value = {
-                "relation_id": self._next(db, "relation", "R"), **payload,
+                "relation_id": self._next(db, "relation", "R"),
+                **payload,
                 "created_at": _now(),
             }
             db.execute("INSERT INTO relations VALUES (?,?,?,?,?,?)", tuple(value.values()))
@@ -744,11 +840,18 @@ class NativeStore:
         purpose: str = "conversation",
         provider: str | None = None,
         model: str | None = None,
+        turn: int | None = None,
+        step: int | None = None,
     ) -> dict:
         payload = {
             "source_key": _text(source_key, "source_key"),
-            "host_id": host_id, "session_id": session_id, "purpose": purpose,
-            "provider": provider, "model": model,
+            "host_id": host_id,
+            "session_id": session_id,
+            "purpose": purpose,
+            "provider": provider,
+            "model": model,
+            "turn": turn,
+            "step": step,
         }
 
         def work(db: sqlite3.Connection) -> dict:
@@ -767,19 +870,47 @@ class NativeStore:
                     ).fetchone()
                     if attempt:
                         attempt_id, node_id = attempt["attempt_id"], attempt["node_id"]
+            if host_id and session_id and turn is not None:
+                frozen = db.execute(
+                    "SELECT * FROM turn_bindings WHERE host_id=? AND session_id=? AND turn=?",
+                    (host_id, session_id, turn),
+                ).fetchone()
+                if frozen:
+                    association_id, attempt_id, node_id = (
+                        frozen["association_id"],
+                        frozen["attempt_id"],
+                        frozen["node_id"],
+                    )
             value = {
-                "observation_id": str(uuid4()), "source_key": source_key,
-                "association_id": association_id, "attempt_id": attempt_id,
-                "node_id": node_id, "purpose": purpose, "provider": provider,
-                "model": model, "amount": None, "completeness": "unknown",
-                "details": {"phase": "started"}, "observed_at": _now(),
+                "observation_id": str(uuid4()),
+                "source_key": source_key,
+                "association_id": association_id,
+                "attempt_id": attempt_id,
+                "node_id": node_id,
+                "purpose": purpose,
+                "provider": provider,
+                "model": model,
+                "amount": None,
+                "completeness": "unknown",
+                "details": {"phase": "started", "turn": turn, "step": step},
+                "observed_at": _now(),
             }
             db.execute(
                 "INSERT INTO usage_observations VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                (value["observation_id"], value["source_key"], value["association_id"],
-                 value["attempt_id"], value["node_id"], value["purpose"], value["provider"],
-                 value["model"], None, value["completeness"],
-                 _json(value["details"]), value["observed_at"]),
+                (
+                    value["observation_id"],
+                    value["source_key"],
+                    value["association_id"],
+                    value["attempt_id"],
+                    value["node_id"],
+                    value["purpose"],
+                    value["provider"],
+                    value["model"],
+                    None,
+                    value["completeness"],
+                    _json(value["details"]),
+                    value["observed_at"],
+                ),
             )
             return value
 
@@ -809,17 +940,23 @@ class NativeStore:
             if not observation:
                 raise NotFoundError(f"Unknown usage observation: {source_key}")
             at = _now()
+            merged_details = {**json.loads(observation["details"]), **details, "phase": "completed"}
             db.execute(
                 "INSERT INTO usage_adjustments VALUES (?,?,?,?,?,?,?)",
                 (
-                    str(uuid4()), observation["observation_id"], observation["amount"], amount,
-                    completeness, _json(details), at,
+                    str(uuid4()),
+                    observation["observation_id"],
+                    observation["amount"],
+                    amount,
+                    completeness,
+                    _json(details),
+                    at,
                 ),
             )
             db.execute(
                 "UPDATE usage_observations SET amount=?,completeness=?,details=? "
                 "WHERE observation_id=?",
-                (amount, completeness, _json(details), observation["observation_id"]),
+                (amount, completeness, _json(merged_details), observation["observation_id"]),
             )
             value = {
                 "observation_id": observation["observation_id"],
@@ -838,12 +975,7 @@ class NativeStore:
         return self._mutate("finish_usage", payload, request_id, work)
 
     def record_snapshot(
-        self,
-        host_id: str,
-        session_id: str,
-        manifest: list[dict],
-        complete: bool,
-        request_id: str,
+        self, host_id: str, session_id: str, manifest: list[dict], complete: bool, request_id: str,
     ) -> dict:
         payload = {
             "host_id": host_id,
@@ -865,9 +997,44 @@ class NativeStore:
             db.execute(
                 "INSERT INTO snapshots VALUES (?,?,?,?,?)",
                 (
-                    value["snapshot_id"], value["attempt_id"], _json(manifest),
-                    int(value["complete"]), value["created_at"],
+                    value["snapshot_id"],
+                    value["attempt_id"],
+                    _json(manifest),
+                    int(value["complete"]),
+                    value["created_at"],
                 ),
+            )
+            context = {
+                "goal": self._project(db)["goal"],
+                "source_attempt_id": attempt["attempt_id"],
+                "source_node_id": attempt["node_id"],
+                "files": manifest,
+                "notes": [
+                    dict(n)
+                    for n in db.execute(
+                        "SELECT * FROM notes WHERE attempt_id=?", (attempt["attempt_id"],)
+                    )
+                ],
+                "publications": [
+                    {
+                        **dict(p),
+                        "gaps": json.loads(p["gaps"]),
+                        "refs": [
+                            f"pub/{p['publication_id']}#{i['item_id']}"
+                            for i in db.execute(
+                                "SELECT item_id FROM publication_items WHERE publication_id=?",
+                                (p["publication_id"],),
+                            )
+                        ],
+                    }
+                    for p in db.execute(
+                        "SELECT * FROM publications WHERE attempt_id=?", (attempt["attempt_id"],)
+                    )
+                ],
+                "provenance": "captured-at-snapshot",
+            }
+            db.execute(
+                "INSERT INTO snapshot_handoffs VALUES(?,?)", (value["snapshot_id"], _json(context))
             )
             self._event(db, "snapshot.created", value)
             return value
@@ -882,8 +1049,7 @@ class NativeStore:
         def work(db: sqlite3.Connection) -> dict:
             project = self._project(db)
             db.execute(
-                "UPDATE project SET control=? WHERE project_id=?",
-                (control, project["project_id"]),
+                "UPDATE project SET control=? WHERE project_id=?", (control, project["project_id"]),
             )
             value = {"project_id": project["project_id"], "control": control}
             self._event(db, "project.control", value)
@@ -962,12 +1128,20 @@ class NativeStore:
         return self._mutate("host_event", payload, request_id, work)
 
     def own_goal(
-        self, host_id: str, session_id: str, goal_id: str, revision: int,
-        phase: str, request_id: str
+        self,
+        host_id: str,
+        session_id: str,
+        goal_id: str,
+        revision: int,
+        phase: str,
+        request_id: str,
     ) -> dict:
         payload = {
-            "host_id": host_id, "session_id": session_id, "goal_id": goal_id,
-            "revision": int(revision), "phase": phase,
+            "host_id": host_id,
+            "session_id": session_id,
+            "goal_id": goal_id,
+            "revision": int(revision),
+            "phase": phase,
         }
 
         def work(db: sqlite3.Connection) -> dict:
@@ -983,10 +1157,7 @@ class NativeStore:
         return self._mutate("own_goal", payload, request_id, work)
 
     def query(
-        self,
-        host_id: str | None = None,
-        session_id: str | None = None,
-        ref: str | None = None,
+        self, host_id: str | None = None, session_id: str | None = None, ref: str | None = None,
     ) -> dict:
         with self._read() as db:
             project = self._project(db)
@@ -1012,8 +1183,11 @@ class NativeStore:
                 value = dict(row)
                 value["gaps"] = json.loads(value["gaps"])
                 value["items"] = [
-                    {**dict(item), "content": json.loads(item["content"]),
-                     "ref": f"pub/{item['publication_id']}#{item['item_id']}"}
+                    {
+                        **dict(item),
+                        "content": json.loads(item["content"]),
+                        "ref": f"pub/{item['publication_id']}#{item['item_id']}",
+                    }
                     for item in db.execute(
                         "SELECT * FROM publication_items WHERE publication_id=? ORDER BY item_id",
                         (row["publication_id"],),
@@ -1052,7 +1226,8 @@ class NativeStore:
                 ],
                 "attempt": (
                     {**dict(attempt), "details": json.loads(attempt["details"])}
-                    if attempt else None
+                    if attempt
+                    else None
                 ),
                 "nodes": [
                     {**dict(row), "inputs": json.loads(row["inputs"])}
@@ -1077,10 +1252,13 @@ class NativeStore:
                 ],
                 "owned_goal": dict(owned_goal) if owned_goal else None,
                 "usage": {
-                    "known": float(usage["known"]), "unknown_count": int(usage["unknown"] or 0),
+                    "known": float(usage["known"]),
+                    "unknown_count": int(usage["unknown"] or 0),
                 },
                 "usage_observations": usage_observations,
             }
+            result["workflow"] = self.workflow_view(db, session_id)
+            result["usage"].update(self.workflow_usage(db))
             if ref:
                 selected = db.execute("SELECT * FROM nodes WHERE node_id=?", (ref,)).fetchone()
                 if selected:
@@ -1121,10 +1299,21 @@ class NativeStore:
 
     def memory_view(self, host_id: str, session_id: str, max_chars: int = 12_000) -> dict:
         state = self.query(host_id, session_id)
+        discussion = state["workflow"].get("session") or {}
         compact = {
-            "goal": state["project"]["goal"], "control": state["project"]["control"],
-            "usage": state["usage"], "focus": state["attempt"],
-            "recent_notes": state["notes"][-5:], "recent_publications": state["publications"][-5:],
+            "session_role": discussion.get("role"),
+            "discussion_context": discussion.get("context")
+            if discussion.get("role") in {"discussion", "handoff"}
+            else None,
+            "task": next(
+                (t for t in state["workflow"]["tasks"] if t["session_id"] == session_id), None
+            ),
+            "goal": state["project"]["goal"],
+            "control": state["project"]["control"],
+            "usage": state["usage"],
+            "focus": state["attempt"],
+            "recent_notes": state["notes"][-5:],
+            "recent_publications": state["publications"][-5:],
             "nodes": state["nodes"],
         }
         text = _json(compact)

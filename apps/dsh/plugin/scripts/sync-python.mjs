@@ -13,6 +13,7 @@ for (const file of [
   'errors.py',
   'migration.py',
   'native_store.py',
+  'workflow_store.py',
   'service.py',
 ]) {
   copyFileSync(join(source, file), join(destination, file));

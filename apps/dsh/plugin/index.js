@@ -6,7 +6,7 @@ import { registerResearchTools } from './tools.js';
 import { registerResearchEvents } from './events.js';
 
 export const name = 'auto-research-v5';
-export const inject = ['commands', 'tools', 'systemPrompt', 'llm', 'goals', 'agents', 'sessionController'];
+export const inject = ['commands', 'tools', 'systemPrompt', 'llm', 'goals', 'agents', 'sessionController', 'jobs', 'sessionProjections'];
 export const RPC_CHANNEL = '/research-v5';
 
 class UnavailableStorage {
@@ -56,7 +56,7 @@ export function apply(ctx, config = {}) {
         const agent = agentFor(ctx, payload.sessionId);
         const id = payload.operationId ?? `${agent.id}:workbench:${Date.now()}`;
         if (endpoint === 'query' || endpoint === 'status') {
-          return { ok: true, value: await domain.request(agent, 'query', {}, id) };
+          return { ok: true, value: await domain.query(agent) };
         }
         if (endpoint === 'open') {
           return { ok: true, value: await domain.open(agent, {
@@ -78,6 +78,12 @@ export function apply(ctx, config = {}) {
         }
         if (endpoint === 'branch') {
           return { ok: true, value: await domain.branch(agent, payload.nodeId, id) };
+        }
+        if (endpoint === 'discussion.open') return { ok: true, value: await domain.discuss(agent, payload.nodeId, id, payload.fresh === true) };
+        if (endpoint === 'restore.preview') return { ok: true, value: await domain.restorePreview(agent, payload.snapshotId) };
+        if (endpoint === 'restore.create') {
+          if (!payload.previewId) throw new Error('Restore requires a preview ID');
+          return { ok: true, value: await domain.restore(agent, payload.snapshotId, id, payload.previewId) };
         }
         if (endpoint === 'restore') {
           return { ok: true, value: await domain.restore(agent, payload.snapshotId, id) };

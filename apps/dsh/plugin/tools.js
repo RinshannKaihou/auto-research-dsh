@@ -12,7 +12,11 @@ function tool(domain, definition) {
     async execute(args, exec) {
       if (!exec.agent) throw new Error('research tools require an owning native agent');
       const id = `${exec.agent.id}:${exec.callId}:${definition.name}`;
-      const value = await domain.request(exec.agent, definition.method, definition.map(args), id);
+      const value = definition.invoke
+        ? await definition.invoke(args, exec, id)
+        : await domain.request(exec.agent, definition.method, { ...definition.map(args), model_call: true }, id);
+      if (definition.method === 'publish') await domain.progress(exec.agent, 'published', value, id);
+      if (definition.method === 'finish') await domain.progress(exec.agent, 'finished', value, id);
       return definition.after ? definition.after(value, args, exec, id) : value;
     },
   });
@@ -20,6 +24,16 @@ function tool(domain, definition) {
 
 export function registerResearchTools(ctx, domain) {
   const definitions = [
+    tool(domain, {
+      name: 'research_dispatch', description: 'Dispatch an existing research node as an independent native exploration task. Capacity queues tasks durably. Only enabled autonomous research agents may dispatch.',
+      parameters: { node_id: { type: 'string', required: true } },
+      invoke: (args, exec, id) => domain.dispatch(exec.agent, args.node_id, id),
+    }),
+    tool(domain, {
+      name: 'research_wait', description: 'Wait for progress from your dispatched tasks. Pause native continuation and release capacity after the current turn and jobs finish. No polling is needed.',
+      parameters: { task_ids: { type: 'array', required: true, items: { type: 'string' } } },
+      invoke: (args, exec, id) => domain.wait(exec.agent, args.task_ids, id),
+    }),
     tool(domain, {
       name: 'research_query',
       method: 'query',
@@ -46,7 +60,7 @@ export function registerResearchTools(ctx, domain) {
         if (!args.dispatch) return node;
         const state = await domain.request(exec.agent, 'query');
         if (state.project.control !== 'auto') return { node, dispatched: false };
-        return { node, dispatched: true, branch: await domain.branch(exec.agent, node.node_id, `${id}:branch`) };
+        return { node, dispatched: true, branch: await domain.dispatch(exec.agent, node.node_id, `${id}:dispatch`) };
       },
     }),
     tool(domain, {

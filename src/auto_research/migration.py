@@ -1,8 +1,8 @@
-"""Legacy inventory and explicit copy-only migration into schema 2.
+"""Legacy inventory and explicit copy-only migration into schema 3.
 
 Preflight reads committed SQLite state without reconciling execution. Migration
 creates a new copy, an integrity-checked database backup, and an idempotent
-schema-2 import; it never mutates the source project.
+schema-3 import; it never mutates the source project.
 """
 
 from __future__ import annotations
@@ -58,6 +58,8 @@ def file_manifest(root: Path) -> list[dict]:
         return rows
     for parent, directories, files in os.walk(root, followlinks=False):
         for name in sorted(directories + files):
+            if name in {"state.sqlite3-wal", "state.sqlite3-shm"}:
+                continue  # SQLite backup captures committed state; transient shared memory is not a material.
             path = Path(parent) / name
             row = {"path": path.relative_to(root).as_posix()}
             try:
@@ -319,12 +321,83 @@ def _max_counter(values: list[str], prefix: str) -> int:
     return result
 
 
+def migrate_native_copy(source: Path, destination: Path) -> dict:
+    """Upgrade only a complete copy; take a consistent DB backup before file copying."""
+    marker = destination / ".research" / "migration-native-to-3.json"
+    if marker.is_file():
+        value = json.loads(marker.read_text())
+        if value["source_root"] != str(source):
+            raise ValueError("Destination belongs to another source")
+        return {
+            "status": "already-migrated",
+            "marker": value,
+            "state": NativeStore(destination).query(),
+        }
+    if destination.exists():
+        raise ValueError("Migration destination must not already exist")
+    temporary = destination.parent / f".{destination.name}.migration-{uuid4().hex}"
+    temporary.mkdir(parents=True)
+    try:
+        metadata = temporary / ".research"
+        metadata.mkdir()
+        with readonly_database(source) as original, sqlite3.connect(
+            metadata / "state.sqlite3"
+        ) as backup:
+            original.backup(backup)
+
+        def ignore(directory, names):
+            return [
+                n
+                for n in names
+                if n == ".git"
+                or (
+                    Path(directory) == source / ".research"
+                    and n in {"state.sqlite3", "state.sqlite3-wal", "state.sqlite3-shm"}
+                )
+            ]
+
+        shutil.copytree(source, temporary, symlinks=True, dirs_exist_ok=True, ignore=ignore)
+        store = NativeStore(temporary)
+        with store._connection() as db:
+            for row in db.execute("SELECT session_id,cwd FROM workflow_sessions"):
+                if row["cwd"] and Path(row["cwd"]).is_relative_to(source):
+                    db.execute(
+                        "UPDATE workflow_sessions SET cwd=?,pause_reason='cold' WHERE session_id=?",
+                        (
+                            str(destination / Path(row["cwd"]).relative_to(source)),
+                            row["session_id"],
+                        ),
+                    )
+            db.execute(
+                "INSERT OR IGNORE INTO workflow_project VALUES (1,NULL,'cold',0,?)", (now(),)
+            )
+            db.execute("UPDATE workflow_project SET state='cold'")
+        state = store.query()
+        value = {
+            "source_root": str(source),
+            "schema_version": 3,
+            "known_usage": state["usage"]["known"],
+            "attempt_count": len(state["attempts"]),
+            "files": project_file_manifest(temporary, []),
+        }
+        (metadata / marker.name).write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n")
+        temporary.rename(destination)
+        return {"status": "migrated", "marker": value, "state": NativeStore(destination).query()}
+    except BaseException:
+        shutil.rmtree(temporary, ignore_errors=True)
+        raise
+
+
 def migrate_copy(source: str | Path, destination: str | Path) -> dict:
-    """Copy a schema-1 project and import it into schema 2 without mutating source."""
+    """Copy a schema-1 project and import it into schema 3 without mutating source."""
     source = Path(source).expanduser().resolve(strict=True)
     destination = Path(destination).expanduser().resolve()
     if destination.is_relative_to(source):
         raise ValueError("Migration destination must be outside the source project")
+    with readonly_database(source) as original:
+        version = original.execute("PRAGMA user_version").fetchone()[0]
+    if version in {2, 3}:
+        return migrate_native_copy(source, destination)
     marker = destination / ".research" / "migration-schema1-to-2.json"
     if marker.is_file():
         previous = json.loads(marker.read_text())
@@ -338,21 +411,32 @@ def migrate_copy(source: str | Path, destination: str | Path) -> dict:
     temporary = destination.parent / f".{destination.name}.migration-{uuid4().hex}"
     temporary.parent.mkdir(parents=True, exist_ok=True)
     try:
-        shutil.copytree(
-            source,
-            temporary,
-            symlinks=True,
-            ignore=shutil.ignore_patterns(".git"),
-        )
+        metadata = temporary / ".research"
+        metadata.mkdir(parents=True)
+        with readonly_database(source) as original, sqlite3.connect(
+            metadata / "state.sqlite3"
+        ) as backup:
+            original.backup(backup)
+
+        def ignore(directory, names):
+            return [
+                n
+                for n in names
+                if n == ".git"
+                or (
+                    Path(directory) == source / ".research"
+                    and n in {"state.sqlite3", "state.sqlite3-wal", "state.sqlite3-shm"}
+                )
+            ]
+
+        shutil.copytree(source, temporary, symlinks=True, dirs_exist_ok=True, ignore=ignore)
         report = preflight(temporary)
         for mapping in report["path_mapping"]:
             original = Path(mapping["original"])
             if original.is_absolute() and original.is_relative_to(source):
                 relative = original.relative_to(source)
                 mapping.update(
-                    relative=str(relative),
-                    external=False,
-                    exists=(temporary / relative).exists(),
+                    relative=str(relative), external=False, exists=(temporary / relative).exists(),
                 )
         report["files"] = project_file_manifest(temporary, report["path_mapping"])
         metadata = temporary / ".research"
@@ -364,10 +448,7 @@ def migrate_copy(source: str | Path, destination: str | Path) -> dict:
         if state_db.exists():
             state_db.unlink()
         store = NativeStore(temporary)
-        project = store.initialize(
-            report["project"]["goal"],
-            "migration:initialize",
-        )
+        project = store.initialize(report["project"]["goal"], "migration:initialize",)
         imported_at = now()
         with sqlite3.connect(legacy_db) as legacy, store._connection() as db:
             legacy.row_factory = sqlite3.Row
@@ -407,8 +488,10 @@ def migrate_copy(source: str | Path, destination: str | Path) -> dict:
                     fields = _json_load(row["fields"], {})
                     terminal = row["state"] in {"completed", "failed", "interrupted"}
                     state = (
-                        "finished" if row["state"] in {"completed", "failed"}
-                        else "stopped" if row["state"] == "interrupted"
+                        "finished"
+                        if row["state"] in {"completed", "failed"}
+                        else "stopped"
+                        if row["state"] == "interrupted"
                         else "unknown"
                     )
                     details = {
@@ -422,8 +505,14 @@ def migrate_copy(source: str | Path, destination: str | Path) -> dict:
                     db.execute(
                         "INSERT INTO attempts VALUES (?,?,?,?,?,?,?,?,?)",
                         (
-                            row["id"], None, row["node_id"], row["role"], state, "manual",
-                            row["created_at"], row["updated_at"] if terminal else None,
+                            row["id"],
+                            None,
+                            row["node_id"],
+                            row["role"],
+                            state,
+                            "manual",
+                            row["created_at"],
+                            row["updated_at"] if terminal else None,
                             _dump_json(details),
                         ),
                     )
@@ -435,9 +524,16 @@ def migrate_copy(source: str | Path, destination: str | Path) -> dict:
                     db.execute(
                         "INSERT INTO usage_observations VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                         (
-                            str(uuid4()), f"legacy:{project['project_id']}:{row['id']}",
-                            None, row["id"], row["node_id"], "legacy-attempt", None, None,
-                            row["cost"], completeness,
+                            str(uuid4()),
+                            f"legacy:{project['project_id']}:{row['id']}",
+                            None,
+                            row["id"],
+                            row["node_id"],
+                            "legacy-attempt",
+                            None,
+                            None,
+                            row["cost"],
+                            completeness,
                             _dump_json(
                                 {"source": "schema1.attempt.cost", "cost_kind": row["cost_kind"]}
                             ),
@@ -448,8 +544,12 @@ def migrate_copy(source: str | Path, destination: str | Path) -> dict:
                     db.execute(
                         "INSERT INTO legacy_refs VALUES (?,?,?,?,?,?)",
                         (
-                            row["ref"], row["node_id"], row["local_id"], row["kind"],
-                            row["item"], imported_at,
+                            row["ref"],
+                            row["node_id"],
+                            row["local_id"],
+                            row["kind"],
+                            row["item"],
+                            imported_at,
                         ),
                     )
                 for name, value in {

@@ -191,10 +191,11 @@ class ProjectRegistry:
 
 
 class NativeService:
-    """Private schema-2 research service. It never invokes a model or schedules work."""
+    """Private schema-3 research service. It never invokes a model or schedules work."""
 
     def __init__(self, registry: str | Path):
         self.registry = ProjectRegistry(registry)
+        self.stores = {}
 
     @staticmethod
     def _identity(request: dict) -> tuple[str, str]:
@@ -216,7 +217,10 @@ class NativeService:
     def _store(self, request: dict) -> tuple[NativeStore, Path, str, str]:
         host_id, session_id = self._identity(request)
         root = self.registry.root_for(host_id, session_id)
-        return NativeStore(root), root, host_id, session_id
+        store = self.stores.setdefault(str(root), None)
+        if store is None:
+            store = self.stores[str(root)] = NativeStore(root)
+        return store, root, host_id, session_id
 
     @staticmethod
     def _intent(root: Path, operation_id: str, kind: str) -> tuple[Path, dict | None]:
@@ -246,6 +250,8 @@ class NativeService:
     def _safe_source(source: object) -> str:
         if not isinstance(source, str) or not source:
             raise ValueError("source_path must be nonempty text")
+        if Path(source).is_absolute() or ".." in Path(source).parts:
+            raise ValueError("Archive paths must be relative to the native session cwd")
         parts = Path(source).parts
         lowered = {part.lower() for part in parts}
         if ".research" in lowered or ".git" in lowered:
@@ -257,7 +263,9 @@ class NativeService:
             raise ValueError("Potential credential files cannot be archived")
         return source
 
-    def _publish_items(self, root: Path, operation_id: str, items: list[dict]) -> list[dict]:
+    def _publish_items(
+        self, root: Path, operation_id: str, items: list[dict], cwd=None
+    ) -> list[dict]:
         intent_path, saved = self._intent(root, operation_id, "publish")
         if saved is not None:
             return saved["items"]
@@ -272,7 +280,7 @@ class NativeService:
             source = value.get("source_path")
             if source is not None:
                 source = self._safe_source(source)
-                product = artifacts.freeze(source, root)
+                product = artifacts.freeze(source, cwd or root)
                 value["object_version"] = product["version"]
                 value["object_kind"] = product["kind"]
             fixed.append(value)
@@ -280,7 +288,7 @@ class NativeService:
         return fixed
 
     def _snapshot_manifest(
-        self, root: Path, operation_id: str, paths: object
+        self, root: Path, operation_id: str, paths: object, cwd=None
     ) -> tuple[list[dict], bool]:
         intent_path, saved = self._intent(root, operation_id, "snapshot")
         if saved is not None:
@@ -293,20 +301,14 @@ class NativeService:
         for source in paths:
             try:
                 source = self._safe_source(source)
-                product = artifacts.freeze(source, root)
+                product = artifacts.freeze(source, cwd or root)
                 manifest.append({"source_path": source, **product, "status": "fixed"})
             except Exception as exc:
-                manifest.append(
-                    {"source_path": source, "status": "incomplete", "error": str(exc)}
-                )
+                manifest.append({"source_path": source, "status": "incomplete", "error": str(exc)})
                 complete = False
         self._write_intent(
             intent_path,
-            {
-                "operation_id": operation_id,
-                "manifest": manifest,
-                "complete": complete,
-            },
+            {"operation_id": operation_id, "manifest": manifest, "complete": complete,},
         )
         return manifest, complete
 
@@ -359,9 +361,7 @@ class NativeService:
                 old = legacy[ref]
                 entry.update({"kind": old["kind"], "legacy": True})
                 if old["kind"] == "product" and isinstance(old["item"], dict):
-                    product = {
-                        key: old["item"].get(key) for key in ("path", "version", "kind")
-                    }
+                    product = {key: old["item"].get(key) for key in ("path", "version", "kind")}
             elif any(item["node_id"] == ref for item in state["nodes"]):
                 entry.update({"kind": "node"})
             else:
@@ -369,19 +369,13 @@ class NativeService:
             if product and all(product.values()):
                 token = hashlib.sha256(ref.encode()).hexdigest()[:16]
                 materialized.append(
-                    {
-                        "node_id": "input",
-                        "product_id": f"ref-{token}",
-                        "product": product,
-                    }
+                    {"node_id": "input", "product_id": f"ref-{token}", "product": product,}
                 )
                 entry["materialized"] = True
                 entry["path"] = f"inputs/input/ref-{token}"
             index.append(entry)
         digest = hashlib.sha256(operation_id.encode()).hexdigest()[:12]
-        workspace = ArtifactStore(root).prepare_workspace(
-            f"branch-{digest}", materialized
-        )
+        workspace = ArtifactStore(root).prepare_workspace(f"branch-{digest}", materialized)
         index_path = workspace / "research-inputs.json"
         index_path.write_text(
             json.dumps(
@@ -409,6 +403,133 @@ class NativeService:
         self._write_intent(intent_path, value)
         return value
 
+    def restore_preview(self, store, root, snapshot_id, session_id):
+        state = store.query()
+        snapshot = next((s for s in state["snapshots"] if s["snapshot_id"] == snapshot_id), None)
+        if not snapshot:
+            raise ValueError("Unknown snapshot")
+        attempt = next(a for a in state["attempts"] if a["attempt_id"] == snapshot["attempt_id"])
+        manifest = snapshot["manifest"]
+        with store._connection() as db:
+            saved = db.execute(
+                "SELECT context FROM snapshot_handoffs WHERE snapshot_id=?", (snapshot_id,)
+            ).fetchone()
+        context = (
+            json.loads(saved["context"])
+            if saved
+            else {
+                "goal": state["project"]["goal"],
+                "source_attempt_id": attempt["attempt_id"],
+                "source_node_id": attempt["node_id"],
+                "files": manifest,
+                "provenance": "legacy-snapshot; no contemporaneous handoff summary",
+            }
+        )
+        context["snapshot_id"] = snapshot_id
+        token = hashlib.sha256(
+            json.dumps([snapshot, session_id], sort_keys=True).encode()
+        ).hexdigest()
+        return {
+            "preview_id": token,
+            "snapshot_id": snapshot_id,
+            "manifest": manifest,
+            "workspace": str(root / "workspaces" / ("restore-" + token[:16])),
+            "complete": snapshot["complete"],
+            "context": context,
+            "eligible": attempt["ended_at"] is not None and attempt["state"] != "unknown",
+            "missing": [m for m in manifest if m.get("status") != "fixed"],
+        }
+
+    def prepare_discussion(self, store, root, host_id, session_id, request):
+        state = store.query(host_id, session_id)
+        node = next((n for n in state["nodes"] if n["node_id"] == request["node_id"]), None)
+        if not node:
+            raise ValueError("Unknown discussion node")
+        if not request.get("fresh"):
+            existing = next(
+                (
+                    s
+                    for s in reversed(state["workflow"]["sessions"])
+                    if s["role"] == "discussion"
+                    and not s["detached"]
+                    and s["node_id"] == node["node_id"]
+                ),
+                None,
+            )
+            if existing:
+                return {
+                    "session_id": existing["session_id"],
+                    "workspace": existing["cwd"],
+                    "context": existing["context"],
+                    "existing": True,
+                }
+        intent, saved = self._intent(root, self._operation(request), "discussion")
+        if saved:
+            return saved
+        digest = hashlib.sha256(self._operation(request).encode()).hexdigest()[:20]
+        workspace = root / "workspaces" / ("discussion-" + digest)
+        workspace.mkdir(parents=True, exist_ok=True)
+        attempt_ids = {
+            a["attempt_id"] for a in state["attempts"] if a["node_id"] == node["node_id"]
+        }
+        refs = set(node.get("inputs", []))
+        publications = [
+            p
+            for p in state["publications"]
+            if p["node_id"] == node["node_id"] or any(i["ref"] in refs for i in p["items"])
+        ]
+        context = {
+            "role": "discussion",
+            "goal": state["project"]["goal"],
+            "node": node,
+            "publications": publications,
+            "notes": [n for n in state["notes"] if n["attempt_id"] in attempt_ids],
+            "instruction": "Discuss these frozen references. Query for newer records explicitly. Do not mutate the research ledger or dispatch research.",
+        }
+        index = []
+        artifacts = ArtifactStore(root)
+        for publication in publications:
+            for item in publication["items"]:
+                entry = {"ref": item["ref"], "content": item["content"]}
+                if item.get("object_version"):
+                    version = item["object_version"]
+                    destination = (
+                        workspace / "inputs" / publication["publication_id"] / item["item_id"]
+                    )
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    artifacts.materialize(
+                        {
+                            "path": f".research/objects/{version}",
+                            "version": version,
+                            "kind": item.get("object_kind") or "file",
+                        },
+                        destination,
+                        readonly=True,
+                    )
+                    entry["path"] = str(destination.relative_to(workspace))
+                index.append(entry)
+        context["material_index"] = index
+        # Keep the full frozen record on disk; IPC and system context carry a bounded view.
+        self._write_intent(workspace / "RESEARCH_CONTEXT.json", context)
+        if len(json.dumps(context, ensure_ascii=False).encode()) > 24000:
+            context = {
+                "role": "discussion",
+                "goal": context["goal"][:2000],
+                "node": {k: str(node[k])[:2000] for k in ("node_id", "question", "plan", "status")},
+                "record_path": "RESEARCH_CONTEXT.json",
+                "publication_ids": [p["publication_id"] for p in publications][-40:],
+                "instruction": context["instruction"]
+                + " Read RESEARCH_CONTEXT.json for the full frozen material index and background.",
+            }
+        value = {
+            "session_id": "discussion-" + digest,
+            "workspace": str(workspace),
+            "context": context,
+            "existing": False,
+        }
+        self._write_intent(intent, value)
+        return value
+
     def handle(self, request: dict) -> dict:
         transport_id = request.get("transport_id", request.get("request_id"))
         if not isinstance(transport_id, str) or not transport_id or len(transport_id) > 128:
@@ -416,7 +537,7 @@ class NativeService:
         method = request.get("method")
         if method == "capabilities":
             value = {
-                "schema_version": 2,
+                "schema_version": 3,
                 "execution_owner": "dsh",
                 "model_loop": "native-goals",
                 "manual_research": True,
@@ -433,37 +554,167 @@ class NativeService:
             if not isinstance(root_value, str) or not Path(root_value).is_absolute():
                 raise ValueError("open requires an absolute host-supplied root")
             root = Path(root_value).expanduser().resolve()
-            store = NativeStore(root)
+            store = self.stores.get(str(root))
+            if store is None:
+                store = self.stores[str(root)] = NativeStore(root)
             try:
                 state = store.query()
             except Exception as exc:
                 if "not initialized" not in str(exc).lower():
                     raise
-                state = {
-                    "project": store.initialize(request.get("goal"), self._operation(request))
-                }
+                state = {"project": store.initialize(request.get("goal"), self._operation(request))}
             project_id = state["project"]["project_id"]
             self.registry.register(project_id, root, host_id, session_id)
             store.associate(host_id, session_id, self._operation(request) + ":associate")
+            store.workflow(
+                host_id,
+                session_id,
+                "register",
+                {
+                    **({"role": request["session_role"]} if request.get("session_role") else {}),
+                    "cwd": request.get("cwd", str(root)),
+                    "node_id": request.get("node_id"),
+                    "context": request.get("context", {}),
+                },
+                self._operation(request) + ":role",
+            )
             value = store.query(host_id, session_id)
         else:
             store, root, host_id, session_id = self._store(request)
-            if method in {"query", "status"}:
+            with store._connection() as db:
+                row = db.execute(
+                    "SELECT * FROM workflow_sessions WHERE session_id=?", (session_id,)
+                ).fetchone()
+                role = dict(row) if row else None
+            writes = {
+                "focus",
+                "propose",
+                "note",
+                "publish",
+                "relate",
+                "snapshot",
+                "finish",
+                "close_node",
+            }
+            if role and role["role"] == "discussion" and method in writes:
+                raise ValueError("Discussion sessions cannot modify the research ledger")
+            if request.get("model_call") and method not in writes | {"query", "status"}:
+                raise ValueError("This operation requires the host controller")
+            if request.get("model_call") and method in {"note", "publish", "snapshot"}:
+                with store._connection() as db:
+                    prior = db.execute(
+                        "SELECT 1 FROM requests WHERE request_id=?", (self._operation(request),)
+                    ).fetchone()
+                    live = db.execute(
+                        "SELECT a.* FROM attempts a JOIN associations s USING(association_id) WHERE s.session_id=? AND s.ended_at IS NULL AND a.ended_at IS NULL",
+                        (session_id,),
+                    ).fetchone()
+                if not prior and not live:
+                    node_id = role["node_id"] if role else None
+                    with store._connection() as db:
+                        node = db.execute(
+                            "SELECT status FROM nodes WHERE node_id=?", (node_id,)
+                        ).fetchone()
+                    if node and node["status"] == "closed":
+                        node_id = None
+                    store.focus(
+                        host_id,
+                        session_id,
+                        node_id,
+                        "researcher",
+                        "manual",
+                        self._operation(request) + ":manual-attempt",
+                    )
+            if method == "workflow":
+                value = store.workflow(
+                    host_id,
+                    session_id,
+                    request["action"],
+                    request.get("fields", {}),
+                    self._operation(request),
+                )
+            elif method == "discussion_prepare":
+                value = self.prepare_discussion(store, root, host_id, session_id, request)
+            elif method == "restore_preview":
+                value = self.restore_preview(store, root, request["snapshot_id"], session_id)
+            elif method == "host_events":
+                value = []
+                for event in request.get("events", []):
+                    if event["event_type"] != "assistant/message" or not event.get("facts", {}).get(
+                        "usage"
+                    ):
+                        continue
+                    facts = event["facts"]
+                    with store._connection() as db:
+                        observations = list(
+                            db.execute(
+                                "SELECT u.* FROM usage_observations u JOIN associations a USING(association_id) WHERE a.host_id=? AND a.session_id=? AND u.purpose='conversation' AND json_extract(u.details,'$.turn')=? AND json_extract(u.details,'$.step')=?",
+                                (host_id, session_id, facts.get("turn"), facts.get("step")),
+                            )
+                        )
+                    if len(observations) == 1 and observations[0]["amount"] is None:
+                        usage = facts["usage"]
+                        amount = usage.get("totalTokens")
+                        if amount is None:
+                            values = [
+                                usage[k]
+                                for k in (
+                                    "inputTokens",
+                                    "outputTokens",
+                                    "cacheReadTokens",
+                                    "cacheWriteTokens",
+                                )
+                                if isinstance(usage.get(k), (float, int))
+                            ]
+                            amount = sum(values) if values else None
+                        if amount is not None:
+                            store.finish_usage(
+                                observations[0]["source_key"],
+                                amount,
+                                "actual",
+                                {"phase": "reconciled", "native_sequence": event["sequence"]},
+                                f"reconcile:{session_id}:{event['sequence']}",
+                            )
+                for event in request.get("events", []):
+                    value.append(
+                        store.record_host_event(
+                            host_id,
+                            session_id,
+                            event["event_type"],
+                            event["sequence"],
+                            event.get("facts", {}),
+                            f"{session_id}:event:{event['sequence']}",
+                        )
+                    )
+                with store._connection() as db:
+                    db.execute(
+                        "INSERT INTO projection_cursors VALUES(?,?) ON CONFLICT(session_id) DO UPDATE SET sequence=MAX(sequence,excluded.sequence)",
+                        (session_id, request.get("cursor", 0)),
+                    )
+            elif method in {"query", "status"}:
                 value = store.query(host_id, session_id, request.get("ref"))
                 value["project_root"] = str(root)
             elif method == "memory":
                 value = store.memory_view(host_id, session_id, int(request.get("max_chars", 12000)))
             elif method == "propose":
                 value = store.propose(
-                    request.get("question"), request.get("why_now"), request.get("plan"),
-                    self._operation(request), request.get("inputs", []),
-                    request.get("purpose", "explore"), request.get("strategy", "continue"),
+                    request.get("question"),
+                    request.get("why_now"),
+                    request.get("plan"),
+                    self._operation(request),
+                    request.get("inputs", []),
+                    request.get("purpose", "explore"),
+                    request.get("strategy", "continue"),
                     request.get("anchor_ref"),
                 )
             elif method == "focus":
                 value = store.focus(
-                    host_id, session_id, request.get("node_id"), request.get("role", "researcher"),
-                    request.get("mode", "manual"), self._operation(request),
+                    host_id,
+                    session_id,
+                    request.get("node_id"),
+                    request.get("role", "researcher"),
+                    request.get("mode", "manual"),
+                    self._operation(request),
                     defer=bool(request.get("defer", False)),
                 )
             elif method == "bind_turn":
@@ -472,25 +723,44 @@ class NativeService:
                 )
             elif method == "note":
                 value = store.note(
-                    host_id, session_id, request.get("body"), request.get("kind", "progress"),
+                    host_id,
+                    session_id,
+                    request.get("body"),
+                    request.get("kind", "progress"),
                     self._operation(request),
                 )
             elif method == "publish":
                 operation_id = self._operation(request)
-                items = self._publish_items(root, operation_id, request.get("items", []))
+                items = self._publish_items(
+                    root,
+                    operation_id,
+                    request.get("items", []),
+                    Path(role["cwd"]) if role and role["cwd"] else root,
+                )
                 value = store.publish_metadata(
-                    host_id, session_id, request.get("status", "partial"),
-                    request.get("summary"), request.get("gaps", []), items, operation_id,
+                    host_id,
+                    session_id,
+                    request.get("status", "partial"),
+                    request.get("summary"),
+                    request.get("gaps", []),
+                    items,
+                    operation_id,
                 )
             elif method == "relate":
                 value = store.relate(
-                    request.get("source_ref"), request.get("target_ref"), request.get("label"),
-                    request.get("note"), self._operation(request),
+                    request.get("source_ref"),
+                    request.get("target_ref"),
+                    request.get("label"),
+                    request.get("note"),
+                    self._operation(request),
                 )
             elif method == "finish":
                 value = store.finish(
-                    host_id, session_id, request.get("state", "finished"),
-                    request.get("details", {}), self._operation(request),
+                    host_id,
+                    session_id,
+                    request.get("state", "finished"),
+                    request.get("details", {}),
+                    self._operation(request),
                 )
             elif method == "close_node":
                 value = store.close_node(request.get("node_id"), self._operation(request))
@@ -498,40 +768,60 @@ class NativeService:
                 value = store.set_control(request.get("control"), self._operation(request))
             elif method == "host_event":
                 value = store.record_host_event(
-                    host_id, session_id, request.get("event_type"), request.get("sequence"),
-                    request.get("facts", {}), self._operation(request),
+                    host_id,
+                    session_id,
+                    request.get("event_type"),
+                    request.get("sequence"),
+                    request.get("facts", {}),
+                    self._operation(request),
                 )
             elif method == "usage_begin":
                 value = store.begin_usage(
-                    request.get("source_key"), self._operation(request), host_id=host_id,
-                    session_id=session_id, purpose=request.get("purpose", "conversation"),
-                    provider=request.get("provider"), model=request.get("model"),
+                    request.get("source_key"),
+                    self._operation(request),
+                    host_id=host_id,
+                    session_id=session_id,
+                    purpose=request.get("purpose", "conversation"),
+                    provider=request.get("provider"),
+                    model=request.get("model"),
+                    turn=request.get("turn"),
+                    step=request.get("step"),
                 )
             elif method == "usage_finish":
                 value = store.finish_usage(
-                    request.get("source_key"), request.get("amount"),
-                    request.get("completeness", "unknown"), request.get("details", {}),
+                    request.get("source_key"),
+                    request.get("amount"),
+                    request.get("completeness", "unknown"),
+                    request.get("details", {}),
                     self._operation(request),
                 )
             elif method == "own_goal":
                 value = store.own_goal(
-                    host_id, session_id, request.get("goal_id"), request.get("revision"),
-                    request.get("phase"), self._operation(request),
+                    host_id,
+                    session_id,
+                    request.get("goal_id"),
+                    request.get("revision"),
+                    request.get("phase"),
+                    self._operation(request),
                 )
             elif method == "snapshot":
                 operation_id = self._operation(request)
                 manifest, complete = self._snapshot_manifest(
-                    root, operation_id, request.get("paths", [])
+                    root,
+                    operation_id,
+                    request.get("paths", []),
+                    Path(role["cwd"]) if role and role["cwd"] else root,
                 )
-                value = store.record_snapshot(
-                    host_id, session_id, manifest, complete, operation_id
-                )
+                value = store.record_snapshot(host_id, session_id, manifest, complete, operation_id)
             elif method == "prepare_branch":
                 value = self._prepare_branch(
                     store, root, request.get("node_id"), self._operation(request)
                 )
             elif method == "prepare_restore":
                 operation_id = self._operation(request)
+                preview = self.restore_preview(store, root, request["snapshot_id"], session_id)
+                if request.get("preview_id") != preview["preview_id"]:
+                    raise ValueError("A current restore preview_id is required")
                 intent_path, saved = self._intent(root, operation_id, "restore")
                 if saved is not None:
                     value = saved
@@ -545,7 +835,8 @@ class NativeService:
                     if snapshot is None:
                         raise ValueError(f"Unknown snapshot: {snapshot_id}")
                     source_attempt = next(
-                        row for row in state["attempts"]
+                        row
+                        for row in state["attempts"]
                         if row["attempt_id"] == snapshot["attempt_id"]
                     )
                     if source_attempt["state"] == "unknown" or source_attempt["ended_at"] is None:
@@ -554,15 +845,16 @@ class NativeService:
                             "finish or stop it before takeover"
                         )
                     digest = hashlib.sha256(operation_id.encode()).hexdigest()[:12]
-                    workspace = root / "workspaces" / f"restore-{digest}"
-                    workspace.mkdir(parents=True, exist_ok=False)
+                    workspace = Path(preview["workspace"])
+                    workspace.mkdir(parents=True, exist_ok=True)
                     artifacts = ArtifactStore(root)
                     restored = []
                     for index, item in enumerate(snapshot["manifest"]):
                         if item.get("status") != "fixed":
                             continue
-                        source_name = Path(item["source_path"]).name or f"item-{index}"
-                        destination = workspace / f"{index:03d}-{source_name}"
+                        source_name = self._safe_source(item["source_path"])
+                        destination = workspace / source_name
+                        destination.parent.mkdir(parents=True, exist_ok=True)
                         artifacts.materialize(
                             {key: item[key] for key in ("path", "version", "kind")},
                             destination,
@@ -578,11 +870,16 @@ class NativeService:
                         "restored": restored,
                         "complete": snapshot["complete"],
                     }
+                    value["context"] = preview["context"]
+                    self._write_intent(workspace / "RESEARCH_HANDOFF.json", preview["context"])
                     self._write_intent(intent_path, value)
             elif method == "record_restore":
                 value = store.record_restore(
-                    host_id, session_id, request.get("snapshot_id"),
-                    request.get("source_attempt_id"), request.get("workspace"),
+                    host_id,
+                    session_id,
+                    request.get("snapshot_id"),
+                    request.get("source_attempt_id"),
+                    request.get("workspace"),
                     self._operation(request),
                 )
             elif method == "detach":

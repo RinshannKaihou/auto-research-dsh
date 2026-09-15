@@ -6,7 +6,7 @@ export function registerResearchCommand(ctx, domain) {
   return ctx.commands.register({
     name: 'research',
     description: 'Manage the research project associated with this native session',
-    input: { hint: 'init|open|status|focus|auto|pause|resume|stop|branch|restore|detach …' },
+    input: { hint: 'init|open|status|auto|pause|resume|stop|discuss|restore|detach …' },
     async handler(invocation) {
       const input = invocation.rawInput.trim();
       const [action = 'status', ...rest] = input.split(/\s+/);
@@ -21,7 +21,7 @@ export function registerResearchCommand(ctx, domain) {
           return result(await domain.open(invocation.agent, { goal: arg }, id));
         }
         if (action === 'open') return result(await domain.open(invocation.agent, {}, id));
-        if (action === 'status') return result(await domain.request(invocation.agent, 'query', {}, id));
+        if (action === 'status') return result(await domain.query(invocation.agent));
         if (action === 'focus') {
           const nodeId = arg === 'planning' || arg === '' ? null : arg;
           return result(await domain.focus(invocation.agent, nodeId, id));
@@ -39,9 +39,12 @@ export function registerResearchCommand(ctx, domain) {
           if (!arg) throw new Error('Usage: /research branch <node-id>');
           return result(await domain.branch(invocation.agent, arg, id));
         }
+        if (action === 'discuss') return result(await domain.discuss(invocation.agent, arg, id));
         if (action === 'restore') {
           if (!arg) throw new Error('Usage: /research restore <snapshot-id>');
-          return result(await domain.restore(invocation.agent, arg, id));
+          const [snapshotId, flag, previewId] = rest;
+          if (flag && (flag !== '--preview-id' || !previewId)) throw new Error('Usage: /research restore <snapshot-id> [--preview-id <id>]');
+          return result(await domain.restore(invocation.agent, snapshotId, id, previewId));
         }
         if (action === 'detach') {
           return result(await domain.detach(invocation.agent, id));

@@ -1,117 +1,64 @@
-# auto-research-v5 for DSH
+# auto-research-v5 0.4.0
 
-This npm package is a native DSH research workflow plugin. It registers one
-`/research` command group, eight model tools, a Research conversation view,
-research context injection, host event projection, model usage observation,
-and native goal control. DSH remains the sole owner of model calls, native
-tools, permissions, sessions, transcripts, cancellation, and goal rounds.
+Native DSH research plugin. DSH owns models, tools, permissions, sessions, transcripts and goal continuation. The bundled Python 3.11+ standard-library process only stores research state; no Python packages, external service, worker or fallback harness are required.
 
-## Requirements and installation
+## Install
 
-- an installed DSH profile;
-- Python 3.11 or newer on `PATH` (or configured through `python`);
-- no Python packages and no separately started service.
-
-Build and install from this directory:
+Build with `npm pack` in this directory. Install in your chosen profile:
 
 ```bash
-npm pack
-dsh plugin --profile <profile-name> add ./auto-research-v5-0.3.3.tgz
+dsh plugin --profile web add ./auto-research-v5-0.4.0.tgz --offline
 ```
 
-Replace `<profile-name>` with the profile to modify, for example `web`, and
-restart that profile when the DSH command asks you to do so.
+Restart DSH yourself after installation. Installation does not restart DSH or resume research. The package includes its Python source. Configure `python` only if Python 3.11+ is not on PATH. Missing Python affects the plugin, not normal DSH chat. No network installation script runs on plugin load.
 
-The `prepack` step copies only the storage, artifact, and migration Python
-modules into the tarball. The plugin starts that code as a bounded private
-stdio child. It does not bundle the schema-1 worker, Runtime, scheduler, GUI,
-or a fallback harness.
+Existing schema-2 projects upgrade transactionally to schema 3 on open, after a consistent `schema-2-backup.sqlite3` backup. Preserve the whole old project before first use; rehearse using the copy-only CLI below. Never point 0.3.x at an upgraded schema-3 database. Cold goals remain disarmed pending explicit resume.
 
-Optional plugin configuration:
+## Use
 
-```yaml
-- id: auto-research-v5
-  config:
-    python: /absolute/path/to/python3
-    registryPath: /absolute/path/to/private/registry.sqlite3
-    autonomousConcurrency: 2
-    maxGoalRounds: 20
-```
-
-`pythonModulePath` is available only for source-checkout development. A packed
-plugin defaults to its bundled `python/` directory. The default registry is
-`~/.dsh/auto-research-v5/registry.sqlite3`.
-
-## Native use
-
-Run `/research init <goal>` in a normal DSH session. The
-project root is the session's current `cwd`; browser and model payloads cannot
-choose another root. Continue chatting normally and use DSH tools normally.
-
-Commands:
+In an ordinary DSH session whose cwd is your research project:
 
 ```text
-/research init <goal>
-/research open
-/research status
-/research focus [planning|<node-id>]
+/research init <research objective>
 /research auto
+/research status
 /research pause
 /research resume
 /research stop
-/research branch <node-id>
+/research discuss <node-id>
 /research restore <snapshot-id>
+/research restore <snapshot-id> --preview-id <preview-id>
 /research detach
 ```
 
-Model tools are `research_query`, `research_propose`, `research_note`,
-`research_snapshot`, `research_publish`, `research_relate`, `research_finish`,
-and `research_close_node`. Tool identity comes from `exec.agent`, and native
-tool call IDs are the stable business idempotency keys.
+Initialization associates the native session as the project's main session without calling a model. `/research open` associates the current cwd's existing project. Continue manual chat normally, or explicitly start autonomous research. The Research tab opens the graph, project controls, discussions, materials, snapshots and native session navigation.
 
-Autonomous mode creates a plugin-owned native goal. It refuses to replace a
-non-plugin goal. Human input pauses that session's plugin goal and remains an
-ordinary user turn. Project pause and resume affect all associated plugin goals.
-Cold-restored goals stay disarmed until explicit resume.
+Clicking a node is read-only. User `focus` and `branch` are retired. **Discuss this node** creates/reuses a separate manual session with frozen background and material versions; it neither starts a goal nor writes research records. Research write tools are rejected on the server. Discussion tokens count toward the project and are also shown separately.
 
-`/research auto` also opens an autonomous planning work segment when the
-session does not have one. Project control is persisted before the native goal
-is armed, so the first `agent/pre-step` cannot mistake startup for a manual or
-paused project and immediately pause it.
+Project controls target the main and exploration sessions, including when invoked from a discussion. Pause permits the current turn to finish. Resume preserves human, native Stop, failure and completed-session pauses. Stop records intent, requests owned cancellation, and remains unverified until turns/jobs exit. Repeated start does not duplicate work; after verified stop, start again in the original main session. A user's native goal is never overwritten. Goal completion does not publish or close a research node.
 
-## Security and failure semantics
+## Agent tools and concurrency
 
-The base product follows DSH's normal single-user trusted-workspace permission
-model. Separate branch `cwd` values provide correct execution attribution and
-write destinations; they are not a claim of strict cross-session read isolation.
+`research_query`, `research_propose`, `research_note`, `research_snapshot`, `research_publish`, `research_relate`, `research_finish`, `research_close_node`, `research_dispatch`, `research_wait`.
 
-Publication and snapshot source paths reject `.research`, `.git`, `.env`, and
-credential-like names. Immutable object bytes are fixed before the schema-2
-transaction. Lost responses and IPC retries reuse their operation intent.
-Usage is observation-only: recorded tokens and missing observations are shown,
-but neither creates a hard or soft limit or pauses autonomous continuation.
+Agents dispatch node-specific tasks using durable intents and stable session IDs. `research_propose(dispatch=true)` uses the same dispatch path. Each task receives its question, plan and immutable inputs in its own cwd. The default two execution slots include the main session; `research_wait` pauses native continuation and releases the slot after its turn and jobs finish. Publication, completion and failure notifications use the native plugin inbox with persistent deduplication. Only waiting sessions can be automatically resumed by a result.
 
-Run the no-network deterministic profile with:
+Partial publications, zero experiments and open nodes are valid. Immutable references use `pub/<publication_id>#<item_id>`. Source files are fixed before publication commit, so retries return the original bytes and result. Historical file snapshots contain source metadata and handoff context. Restore preview does not create files, sessions or model calls; execution creates a new manual handoff session and never clears the old cwd.
+
+## Usage and configuration
+
+Usage is monitoring only, with actual, estimated, in-progress, missing and discussion values. There is no token/cost ceiling. Missing usage or normal IPC backlog does not pause research. Confirmed state-storage failure pauses plugin-owned autonomous goals and reports the reason. Late usage remains attributed to its original turn and attempt. Native auxiliary calls are included when the host provides session identity; absent identity is not guessed.
+
+Optional plugin config: `python`, `registryPath`, `autonomousConcurrency` (default 2), `maxGoalRounds` (optional native round limit). `pythonModulePath` is a development override. Native round limits are host controls, not usage limits. The default registry is `~/.dsh/auto-research-v5/registry.sqlite3`.
+
+Independent cwd values express execution ownership, not strong cross-directory read isolation. DSH permissions still apply. Snapshots exclude runtime/Git directories and credential-like paths. Recovery does not replay unresolved commands.
+
+## Offline maintenance (source checkout)
 
 ```bash
-python3 tests/dsh-profile/run.py \
-  --dsh-root /absolute/path/to/@deepseek-ai/dsh
+PYTHONPATH=src python3 -m auto_research.maintenance_cli -p /old/project migration migrate-copy --destination /new/project-copy
+PYTHONPATH=src python3 -m auto_research.maintenance_cli -p /new/project-copy validate
+PYTHONPATH=src python3 -m auto_research.maintenance_cli -p /new/project-copy export --output /new/state-export.json
 ```
 
-Never load `tests/dsh-profile/probe.mjs` into a real profile. It is a fixture
-provider that rejects all non-fixture provider requests.
-
-## Research graph (0.3.3)
-
-The Research view defaults to a deterministic SVG node graph (a list on narrow
-screens). Selection is read-only; focus and branch require explicit buttons.
-Edges display recorded relations, fixed inputs, and history anchors. Publications,
-snapshots, and all attempts remain in the details; unassigned planning records
-remain accessible below the graph. Token usage is observation-only.
-
-See `docs/WORKBENCH.md` in the source repository for controls and failure semantics.
-The client uses the host React instance and no additional graph runtime.
-Edit `frontend/*.js`, then run `npm run build:client`; `npm run check:client`
-verifies the committed bundle. `npm pack` rebuilds it automatically.
-From the repository root, `make test-dsh-plugin` exercises projection, layout,
-async UI state transitions, and plugin boundaries.
+For rollback, first export schema-3 state and preserve its entire project directory (including objects, snapshots, usage and native session references). Then select a separate compatible pre-upgrade copy and reinstall the old package. Never downgrade the only database or delete post-upgrade materials. No reverse schema writer is supplied.

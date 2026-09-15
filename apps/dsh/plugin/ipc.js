@@ -24,6 +24,7 @@ export class StorageClient {
       throw new Error(`Auto Research requires local Python 3.11+ (${python} is unavailable or too old)`);
     }
     this.pending = new Map();
+    this.queue = [];
     this.closed = false;
     this.buffer = Buffer.alloc(0);
     this.timeoutMs = timeoutMs;
@@ -55,12 +56,13 @@ export class StorageClient {
       this.pending.delete(response.request_id);
       clearTimeout(pending.timer);
       response.ok ? pending.resolve(response.value) : pending.reject(new Error(response.error?.message ?? 'Storage request failed'));
+      this.pump();
     }
     if (this.buffer.length > 4 * 1024 * 1024) this.close();
   }
   request(method, identity = {}, fields = {}, operationId = randomUUID()) {
     if (this.closed) return Promise.reject(new Error('Storage service disconnected'));
-    if (this.pending.size >= 16) return Promise.reject(new Error('Storage service busy'));
+    if (this.queue.length >= 4096) return Promise.reject(new Error('Storage queue capacity exceeded; retry with the same operation ID'));
     const requestId = randomUUID();
     const line = JSON.stringify({
       ...fields,
@@ -71,14 +73,26 @@ export class StorageClient {
     }) + '\n';
     if (Buffer.byteLength(line) > 64 * 1024) return Promise.reject(new Error('Request too large'));
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(requestId);
-        reject(new Error('Storage service timed out; last view may be stale'));
-      }, this.timeoutMs);
-      this.pending.set(requestId, {resolve, reject, timer});
-      this.child.stdin.write(line);
+      const priority = /^(usage_|workflow|own_goal|finish|bind_turn)/.test(method) ? 0 : method === 'host_events' ? 2 : 1;
+      this.queue.push({ requestId, line, resolve, reject, priority, retries: 0 });
+      this.queue.sort((a,b) => a.priority-b.priority);
+      this.pump();
     });
   }
+  pump() {
+    while (!this.closed && this.pending.size < 4 && this.queue.length) {
+      const entry = this.queue.shift();
+      entry.timer = setTimeout(() => {
+        this.pending.delete(entry.requestId);
+        if (++entry.retries <= 2) this.queue.unshift(entry);
+        else entry.reject(new Error('Storage service timed out; last view may be stale'));
+        this.pump();
+      }, this.timeoutMs);
+      this.pending.set(entry.requestId, entry);
+      this.child.stdin.write(entry.line);
+    }
+  }
+
   fail(error) {
     this.closed = true;
     for (const pending of this.pending.values()) {
@@ -86,6 +100,7 @@ export class StorageClient {
       pending.reject(error);
     }
     this.pending.clear();
+    for (const entry of this.queue.splice(0)) entry.reject(error);
   }
   close() {
     this.fail(new Error('Storage service closed'));
