@@ -348,7 +348,9 @@ class MemoryStore:
             (todo_id, trigger_kind, trigger_ref, node_id, "pending", at, at),
         )
 
-    def record_knowledge(self, fields: dict, request_id: str) -> dict:
+    def record_knowledge(
+        self, fields: dict, request_id: str, *, execution_identity: tuple[str, str] | None = None
+    ) -> dict:
         kind = fields.get("kind")
         if kind not in KINDS:
             raise ValidationError("Invalid knowledge kind")
@@ -378,9 +380,31 @@ class MemoryStore:
             "node_id": fields.get("node_id"),
             "source_sequence": fields.get("source_sequence"),
         }
+        if execution_identity is not None:
+            visibility = fields.get("visibility", "node")
+            if visibility not in {"node", "project"}:
+                raise ValidationError("visibility must be node or project")
+            if visibility == "project" and fields.get("node_id") is not None:
+                raise ValidationError("project visibility cannot also specify node_id")
+            # Keep old request fingerprints valid: a pre-upgrade global record
+            # replays its original receipt rather than changing placement.
+            if "visibility" in fields:
+                payload["visibility"] = visibility
 
         def work(db: sqlite3.Connection) -> dict:
-            return self._record_knowledge_in_tx(db, payload)
+            effective = dict(payload)
+            if execution_identity is not None and visibility == "node" and not payload["node_id"]:
+                association = self._association(db, *execution_identity)
+                attempt = db.execute(
+                    "SELECT node_id FROM attempts WHERE association_id=? AND ended_at IS NULL",
+                    (association["association_id"],),
+                ).fetchone()
+                if not attempt or not attempt["node_id"]:
+                    raise ValidationError(
+                        "No current node; specify node_id or visibility='project'"
+                    )
+                effective["node_id"] = attempt["node_id"]
+            return self._record_knowledge_in_tx(db, effective)
 
         return self._mutate("knowledge.record", payload, request_id, work)
 
@@ -769,6 +793,26 @@ class MemoryStore:
                 value = self._decode_knowledge(row)
                 selected.setdefault(value["ref"], value)
             knowledge = list(selected.values())
+            coordinator = session and session["role"] == "main" and node_id is None
+            if coordinator:
+                # Independent bounded selections prevent a busy agenda or a burst
+                # of disputes from hiding the other coordination responsibilities.
+                knowledge = {}
+                for label, predicate, limit in (
+                    ("disputed", "r.status='disputed'", 3),
+                    ("revised", "r.revision>1 AND r.status!='disputed'", 3),
+                    ("lessons", "e.kind='lesson' AND r.status!='disputed'", 4),
+                    ("project", "e.node_id IS NULL AND r.status!='disputed'", 3),
+                ):
+                    knowledge[label] = [
+                        self._decode_knowledge(row)
+                        for row in db.execute(
+                            "SELECT e.kind,e.node_id,r.* FROM knowledge_entries e JOIN knowledge_revisions r USING(knowledge_id) "
+                            "WHERE r.revision=(SELECT MAX(r2.revision) FROM knowledge_revisions r2 WHERE r2.knowledge_id=r.knowledge_id) "
+                            f"AND e.kind!='open_question' AND ({predicate}) ORDER BY r.rowid DESC LIMIT ?",
+                            (limit,),
+                        )
+                    ]
             questions = [
                 dict(r)
                 for r in db.execute(
@@ -776,6 +820,13 @@ class MemoryStore:
                     (related_json, node_id),
                 )
             ]
+            if coordinator:
+                questions = [
+                    dict(row)
+                    for row in db.execute(
+                        "SELECT node_id,question,question_ref,status FROM nodes WHERE status IN ('proposed','open') ORDER BY rowid DESC LIMIT 8"
+                    )
+                ]
             notes = []
             if attempt:
                 notes = [
@@ -908,14 +959,53 @@ class MemoryStore:
                         "specialist_task": 1400,
                         "attempt": 400,
                         "knowledge": 4000,
-                        "questions": 800,
+                        "questions": 1600 if coordinator else 800,
                         "frozen_context": 1600,
                     }.get(name, 1000),
                 )
                 if allowance < 100:
                     omitted.append(name)
                     continue
-                if name == "knowledge":
+                if name == "knowledge" and coordinator:
+                    groups = {}
+                    for label, share in (
+                        ("disputed", 0.23),
+                        ("revised", 0.23),
+                        ("lessons", 0.33),
+                        ("project", 0.17),
+                    ):
+                        rows = value[label]
+                        entries = []
+                        budget = int(allowance * share)
+                        for item in rows:
+                            compact = {
+                                key: item[key]
+                                for key in (
+                                    "ref",
+                                    "node_id",
+                                    "kind",
+                                    "statement",
+                                    "conditions",
+                                    "status",
+                                    "evidence_refs",
+                                    "supersedes",
+                                )
+                            }
+                            entry = bounded_value(
+                                compact, min(420, budget - len(_encoded(entries)) - 80)
+                            )
+                            if len(_encoded(entries + [entry])) > budget - 60:
+                                break
+                            entries.append(entry)
+                            included_refs.append(item["ref"])
+                            if budget - len(_encoded(entries)) < 250:
+                                break
+                        groups[label] = {
+                            "items": entries,
+                            "omitted_from_selection": len(rows) - len(entries),
+                        }
+                    value = groups
+                elif name == "knowledge":
                     entries = []
                     for item in value:
                         compact = {
@@ -956,6 +1046,8 @@ class MemoryStore:
             digest = hashlib.sha256(body.encode()).hexdigest()
             upper = int(db.execute("SELECT COALESCE(MAX(event_id),0) FROM events").fetchone()[0])
             dependencies = included_refs
+            if coordinator:
+                dependencies.extend(q["question_ref"] for q in questions if q["question_ref"])
             if node_row and node_row["question_ref"]:
                 dependencies.append(node_row["question_ref"])
             if checkpoint:

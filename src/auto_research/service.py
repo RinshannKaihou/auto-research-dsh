@@ -870,7 +870,9 @@ class NativeService:
                     },
                 }
                 if action == "record":
-                    value = store.record_knowledge(fields, self._operation(request))
+                    value = store.record_knowledge(
+                        fields, self._operation(request), execution_identity=(host_id, session_id)
+                    )
                 elif action == "revise":
                     value = store.revise_knowledge(fields, self._operation(request))
                 elif action == "checkpoint":

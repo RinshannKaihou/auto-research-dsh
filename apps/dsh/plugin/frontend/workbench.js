@@ -47,6 +47,7 @@ export function createWorkbench(React, rpc, openSession, projectGraph, ResearchG
     const runLabels={manual:'尚未开始',running:'自主推进中',paused:'自主推进已暂停',stopping:'停止处理中',unverified:'停止待核实',stopped:'已停止',complete:'自主目标已结束',cold:'重启后等待显式恢复'};
     const reasons={project:'项目暂停',project_wait:'项目暂停（等待探索）',human:'人工介入',wait:'等待探索进展',native_stop:'原生停止',host_limit:'宿主限制',fault:'执行故障',cold:'重启未恢复',complete:'目标已完成',finished:'工作段已结束',stop:'停止处理中',unverified:'待核实',legacy_history:'历史探索（不加入自主调度）'};
     const sessionCards=(state?.sessions??[]).map(saved=>({...saved,...(runtime?.sessions??[]).find(live=>live.session_id===saved.session_id)}));
+    const blockedCreations=(state?.tasks??state?.workflow?.tasks??[]).filter(t=>t.state==='unverified'&&!(state?.sessions??[]).some(s=>s.session_id===t.session_id));
     const knowledgeTerm=knowledgeSearch.trim().toLocaleLowerCase();
     const knowledgeRows=(state?.knowledge??[]).filter(item=>!knowledgeTerm||`${item.ref} ${item.kind} ${typeof item.statement==='string'?item.statement:item.statement?.preview??''} ${JSON.stringify(item.conditions)}`.toLocaleLowerCase().includes(knowledgeTerm));
     const disabled=busy||!!error||!state;
@@ -68,6 +69,7 @@ export function createWorkbench(React, rpc, openSession, projectGraph, ResearchG
           h('span',null,h('strong',null,(state.review_todos??[]).filter(item=>item.state==='pending').length),'待整理'),
           h('span',null,h('strong',null,Number(state.usage.known).toLocaleString()),'已记录 token'),h('span',null,h('strong',null,state.usage.missing??state.usage.unknown_count),'缺失请求')),
           h('p',null,`项目推进：${runLabels[runState]??runState} · 待审批：${runtime?.pending_approvals??'未知'}`),
+          blockedCreations.length>0&&h('p',{role:'alert'},`需要处理：${blockedCreations.length} 个探索任务的创建结果尚未核实，保留 ${blockedCreations.length} 个研究槽位，其他任务可能排队。请在“探索任务与恢复”核实并重试；停止项目后也可使用“核实停止”。`),
           runtime?.main_session_id&&h('button',{onClick:()=>navigate(runtime.main_session_id)},'打开研究主会话'),
           h('p',null,`当前浏览会话：${roles[runtime?.current?.role]??'未知'} · ${runtime?.current?.native_status??'未知'} · ${reasons[runtime?.current?.pause_reason]??runtime?.current?.pause_reason??'无暂停'}`),
           h('p',null,`用量：实际 ${state.usage.actual??0} · 估算 ${state.usage.estimated??0} · 进行中 ${state.usage.in_progress??0} · 讨论 ${state.usage.discussion??0} token；只监控，无费用上限。`),
@@ -117,7 +119,7 @@ export function createWorkbench(React, rpc, openSession, projectGraph, ResearchG
           ['fault','host_limit','unverified'].includes(s.pause_reason)&&h('button',{disabled,onClick:()=>act('retry',{targetSessionId:s.session_id})},'核实并重试'),
           h('details',null,h('summary',null,'关联历史与原生状态'),h('pre',null,JSON.stringify({goal:s.goal,jobs:s.jobs,intervals:state.associations.filter(a=>a.session_id===s.session_id)},null,2)))))),
         h('details',{className:'ari-section'},h('summary',null,`节点内部协作 · ${(state.specialists??[]).length}`),...(state.specialists??[]).map(s=>h('article',{key:s.task_id},h('strong',null,`${s.task_id} · ${s.purpose} · ${s.state}`),h('p',null,`${s.label} · ${s.node_id??'项目规划'}`),s.child_session_id&&h('button',{onClick:()=>navigate(s.child_session_id)},'打开专家会话'),s.state==='unverified'&&h('button',{disabled,onClick:()=>act('verify-specialist',{taskId:s.task_id})},'核实专家退出'),s.error&&h('p',{role:'alert'},s.error)))),
-        h('details',{className:'ari-section'},h('summary',null,'探索任务与恢复'),...(state.tasks??state.workflow?.tasks??[]).map(t=>h('article',{key:t.task_id},h('p',null,`${t.task_id} · ${t.node_id} · ${t.state}${t.error?' · '+t.error:''}`),['failed','unverified'].includes(t.state)&&h('button',{disabled,onClick:()=>act('retry',{taskId:t.task_id})},'核实并重试创建')))),
+        h('details',{className:'ari-section',open:blockedCreations.length>0},h('summary',null,'探索任务与恢复'),...(state.tasks??state.workflow?.tasks??[]).map(t=>h('article',{key:t.task_id},h('p',null,`${t.task_id} · ${t.node_id} · ${t.state}${t.error?' · '+t.error:''}`),blockedCreations.some(b=>b.task_id===t.task_id)&&h('p',null,'需要处理：创建结果待核实，保留 1 个研究槽位；未确认前不会自动重新创建。'),['failed','unverified'].includes(t.state)&&h('button',{disabled,onClick:()=>act('retry',{taskId:t.task_id})},'核实并重试创建')))),
         h('details',{className:'ari-section'},h('summary',null,'高级设置'),
           h('p',null,'科研指导按内容版本登记，只在相关任务上下文中取用方法卡。'),
           state.guidance&&h('p',null,`当前指导：${state.guidance.path} · ${state.guidance.version} · ${state.guidance.content_hash}`),

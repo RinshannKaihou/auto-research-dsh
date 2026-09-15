@@ -93,11 +93,12 @@ export function registerResearchTools(ctx, domain) {
     }),
     tool(domain, {
       name: 'research_memory',
-      description: 'Record or revise sourced knowledge, checkpoint the current node, or run consolidation. In manual mode consolidate only when the user explicitly asks. Claims, observations, and lessons require evidence_refs.',
+      description: 'Record or revise sourced knowledge, checkpoint the current node, or run consolidation. For record, omitted node_id defaults to the current work segment node. Project-wide placement requires visibility="project" explicitly; without a current node supply node_id or project visibility. Placement is retrieval context, not access isolation; keep scientific applicability in conditions/scope. In manual mode consolidate only when the user explicitly asks. Claims, observations, and lessons require evidence_refs.',
       parameters: {
         action: { type: 'string', required: true, enum: ['record', 'revise', 'checkpoint', 'consolidate'] },
         kind: { type: 'string', enum: ['observation', 'hypothesis', 'lesson', 'decision', 'open_question', 'claim'] },
         statement: { type: 'string' }, node_id: { type: 'string' }, status: { type: 'string' },
+        visibility: { type: 'string', enum: ['node', 'project'] },
         scope: { type: 'object', additionalProperties: true, properties: {} },
         conditions: { type: 'object', additionalProperties: true, properties: {} },
         evidence_refs: { type: 'array', items: { type: 'string' } },
