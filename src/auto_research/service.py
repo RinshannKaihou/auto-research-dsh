@@ -473,7 +473,9 @@ class NativeService:
         with store._connection() as db:
             attempt_ids = {
                 row["attempt_id"]
-                for row in db.execute("SELECT attempt_id FROM attempts WHERE node_id=?", (node["node_id"],))
+                for row in db.execute(
+                    "SELECT attempt_id FROM attempts WHERE node_id=?", (node["node_id"],)
+                )
             }
             publication_rows = list(
                 db.execute(
@@ -650,8 +652,14 @@ class NativeService:
                 "memory_write",
                 "specialist_create",
             }
-            if role and role["role"] in {"discussion", "handoff", "specialist"} and method in writes:
-                raise ValueError(f"{role['role'].title()} sessions cannot modify the research ledger")
+            if (
+                role
+                and role["role"] in {"discussion", "handoff", "specialist"}
+                and method in writes
+            ):
+                raise ValueError(
+                    f"{role['role'].title()} sessions cannot modify the research ledger"
+                )
             if method == "guidance_register" and (not role or role["role"] != "main"):
                 raise ValueError("Only the research main session may configure method guidance")
             if request.get("model_call") and method not in writes | {"query", "status"}:
@@ -747,17 +755,53 @@ class NativeService:
                         "INSERT INTO projection_cursors VALUES(?,?) ON CONFLICT(session_id) DO UPDATE SET sequence=MAX(sequence,excluded.sequence)",
                         (session_id, request.get("cursor", 0)),
                     )
+            elif method == "recovery_receipt":
+                with store._read() as db:
+                    row = db.execute(
+                        "SELECT details FROM workflow_intents WHERE intent_id=? AND session_id=? AND kind='recovery-receipt' AND state='complete'",
+                        (request["key"], session_id),
+                    ).fetchone()
+                    value = json.loads(row["details"]) if row else None
+            elif method == "task_context":
+                from .memory_store import bounded_value
+
+                selected = store.reference_query(request["task_id"], full=True)
+                if selected["kind"] != "exploration-task":
+                    raise ValueError("Unknown exploration task")
+                value = bounded_value(selected["value"]["context"], 6000)
+            elif method == "task_creation_clear":
+                with store._read() as db:
+                    task = db.execute(
+                        "SELECT session_id FROM exploration_tasks WHERE task_id=?",
+                        (request["task_id"],),
+                    ).fetchone()
+                    if not task:
+                        raise ValueError("Unknown exploration task")
+                    sid = task["session_id"]
+                    rows = db.execute(
+                        "SELECT 1 FROM associations WHERE session_id=? UNION ALL SELECT 1 FROM workflow_sessions WHERE session_id=? UNION ALL SELECT 1 FROM workflow_intents WHERE session_id=? LIMIT 1",
+                        (sid, sid, sid),
+                    ).fetchone()
+                    value = {"clear": rows is None}
+            elif method == "workflow_page":
+                with store._read() as db:
+                    value = store.workflow_control(db, session_id, request.get("cursors"))
             elif method == "status" or method == "control_state":
                 value = store.control_state(host_id, session_id)
                 value["project_root"] = str(root)
             elif method == "query":
                 if request.get("ref") and request.get("offset") is not None:
                     value = store.reference_chunk(
-                        request["ref"], offset=request.get("offset", 0), limit=request.get("limit", 8192)
+                        request["ref"],
+                        offset=request.get("offset", 0),
+                        limit=request.get("limit", 8192),
                     )
                 elif request.get("ref"):
                     value = store.reference_query(request["ref"])
-                elif any(request.get(key) is not None for key in ("query", "kind", "node_id", "status", "revision", "conditions")):
+                elif any(
+                    request.get(key) is not None
+                    for key in ("query", "kind", "node_id", "status", "revision", "conditions")
+                ):
                     value = store.knowledge_query(
                         query=request.get("query"),
                         node_id=request.get("node_id"),
@@ -812,11 +856,7 @@ class NativeService:
                 )
             elif method == "context_record":
                 value = store.record_context_request(
-                    {
-                        **request.get("fields", {}),
-                        "host_id": host_id,
-                        "session_id": session_id,
-                    },
+                    {**request.get("fields", {}), "host_id": host_id, "session_id": session_id,},
                     self._operation(request),
                 )
             elif method == "memory_write":
@@ -859,10 +899,7 @@ class NativeService:
                 )
             elif method == "specialist_finish":
                 value = store.specialist_finish(
-                    {
-                        **request.get("fields", {}),
-                        "parent_session_id": session_id,
-                    },
+                    {**request.get("fields", {}), "parent_session_id": session_id,},
                     self._operation(request),
                 )
             elif method == "specialist_get":
@@ -1031,7 +1068,9 @@ class NativeService:
                     if selected_snapshot["kind"] != "snapshot":
                         raise ValueError(f"Unknown snapshot: {snapshot_id}")
                     snapshot = selected_snapshot["value"]
-                    source_attempt = store.reference_query(snapshot["attempt_id"], full=True)["value"]
+                    source_attempt = store.reference_query(snapshot["attempt_id"], full=True)[
+                        "value"
+                    ]
                     if source_attempt["state"] == "unknown" or source_attempt["ended_at"] is None:
                         raise ValueError(
                             "The source work segment is still active or unverified; "

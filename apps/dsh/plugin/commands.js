@@ -37,8 +37,13 @@ export function registerResearchCommand(ctx, domain) {
           return result(await domain.resumeSession(invocation.agent, rest[1], id));
         }
         if (action === 'retry') {
-          if (rest.length !== 2 || rest[0] !== '--session') throw new Error('Usage: /research retry --session <id>');
+          if (rest.length === 2 && rest[0] === '--task') return result(await domain.retryTask(invocation.agent, rest[1], id));
+          if (rest.length !== 2 || rest[0] !== '--session') throw new Error('Usage: /research retry --session <id> | --task <id>');
           return result(await domain.resumeSession(invocation.agent, rest[1], id, { retry: true }));
+        }
+        if (action === 'verify-specialist') {
+          if (rest.length !== 1) throw new Error('Usage: /research verify-specialist <task-id>');
+          return result(await domain.verifySpecialist(invocation.agent, arg, id));
         }
         if (action === 'verify-stop') return result(await domain.verifyStop(invocation.agent, id));
         if (action === 'stop') {

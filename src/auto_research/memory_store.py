@@ -103,6 +103,30 @@ def _encoded(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, allow_nan=False)
 
 
+def bounded_value(value: Any, limit: int) -> Any:
+    """Keep valid structured previews, preserving every mapping key at small limits."""
+    if len(_encoded(value)) <= limit:
+        return value
+
+    def trim(item, width):
+        if isinstance(item, str):
+            return item if len(item) <= width else item[:width] + "… [expand source]"
+        if isinstance(item, dict):
+            return {key: trim(val, width) for key, val in item.items()}
+        if isinstance(item, list):
+            kept = [trim(val, width) for val in item[: max(1, width // 40)]]
+            if len(kept) < len(item):
+                kept.append({"omitted_count": len(item) - len(kept)})
+            return kept
+        return item
+
+    for width in (1200, 600, 300, 150, 60, 20, 0):
+        preview = trim(value, width)
+        if len(_encoded(preview)) <= limit:
+            return preview
+    return {"preview": "Source exceeds this view; use research_query", "truncated": True}
+
+
 def _require_text(value: Any, label: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValidationError(f"{label} must be nonempty text")
@@ -169,19 +193,43 @@ def migrate_schema4(path: Path) -> None:
                 db.execute("ALTER TABLE nodes ADD COLUMN question_ref TEXT")
             item_columns = {row[1] for row in db.execute("PRAGMA table_info(publication_items)")}
             if "knowledge_refs" not in item_columns:
-                db.execute("ALTER TABLE publication_items ADD COLUMN knowledge_refs TEXT NOT NULL DEFAULT '[]'")
+                db.execute(
+                    "ALTER TABLE publication_items ADD COLUMN knowledge_refs TEXT NOT NULL DEFAULT '[]'"
+                )
             for node in db.execute("SELECT * FROM nodes WHERE question_ref IS NULL ORDER BY rowid"):
                 kid = "K-legacy-" + hashlib.sha256(node["node_id"].encode()).hexdigest()[:16]
                 created = node["created_at"] or _now()
                 source = {"kind": "legacy-node", "node_id": node["node_id"]}
-                db.execute("INSERT OR IGNORE INTO knowledge_entries VALUES(?,?,?,?)", (kid, "open_question", node["node_id"], created))
+                db.execute(
+                    "INSERT OR IGNORE INTO knowledge_entries VALUES(?,?,?,?)",
+                    (kid, "open_question", node["node_id"], created),
+                )
                 db.execute(
                     "INSERT OR IGNORE INTO knowledge_revisions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (kid, 1, node["question"], "{}", "{}", "working", "[]", _encoded(source), "[]", "[]", "legacy-migration", created, None),
+                    (
+                        kid,
+                        1,
+                        node["question"],
+                        "{}",
+                        "{}",
+                        "working",
+                        "[]",
+                        _encoded(source),
+                        "[]",
+                        "[]",
+                        "legacy-migration",
+                        created,
+                        None,
+                    ),
                 )
                 ref = _knowledge_ref(kid, 1)
-                db.execute("UPDATE nodes SET question_ref=? WHERE node_id=?", (ref, node["node_id"]))
-                db.execute("INSERT OR IGNORE INTO node_questions VALUES(?,?,?,?)", (node["node_id"], kid, 1, created))
+                db.execute(
+                    "UPDATE nodes SET question_ref=? WHERE node_id=?", (ref, node["node_id"])
+                )
+                db.execute(
+                    "INSERT OR IGNORE INTO node_questions VALUES(?,?,?,?)",
+                    (node["node_id"], kid, 1, created),
+                )
             db.execute("PRAGMA user_version=4")
             db.commit()
         except BaseException:
@@ -213,7 +261,14 @@ class MemoryStore:
     @staticmethod
     def _decode_knowledge(row: sqlite3.Row) -> dict:
         value = dict(row)
-        for key in ("scope", "conditions", "evidence_refs", "source_identity", "dependencies", "supersedes"):
+        for key in (
+            "scope",
+            "conditions",
+            "evidence_refs",
+            "source_identity",
+            "dependencies",
+            "supersedes",
+        ):
             value[key] = json.loads(value[key])
         value["ref"] = _knowledge_ref(value["knowledge_id"], value["revision"])
         return value
@@ -223,7 +278,10 @@ class MemoryStore:
         for ref in refs:
             if ref.startswith("knowledge/"):
                 kid, revision = parse_knowledge_ref(ref)
-                if not db.execute("SELECT 1 FROM knowledge_revisions WHERE knowledge_id=? AND revision=?", (kid, revision)).fetchone():
+                if not db.execute(
+                    "SELECT 1 FROM knowledge_revisions WHERE knowledge_id=? AND revision=?",
+                    (kid, revision),
+                ).fetchone():
                     raise NotFoundError(f"Unknown research reference: {ref}")
             else:
                 MemoryStore._require_legacy_ref(db, ref)
@@ -232,9 +290,20 @@ class MemoryStore:
     def _require_legacy_ref(db: sqlite3.Connection, ref: str) -> None:
         if ref.startswith("pub/"):
             pid, _, item = ref[4:].partition("#")
-            if item and db.execute("SELECT 1 FROM publication_items WHERE publication_id=? AND item_id=?", (pid, item)).fetchone():
+            if (
+                item
+                and db.execute(
+                    "SELECT 1 FROM publication_items WHERE publication_id=? AND item_id=?",
+                    (pid, item),
+                ).fetchone()
+            ):
                 return
-            if not item and db.execute("SELECT 1 FROM publications WHERE publication_id=?", (pid,)).fetchone():
+            if (
+                not item
+                and db.execute(
+                    "SELECT 1 FROM publications WHERE publication_id=?", (pid,)
+                ).fetchone()
+            ):
                 return
         if db.execute("SELECT 1 FROM nodes WHERE node_id=?", (ref,)).fetchone():
             return
@@ -261,7 +330,10 @@ class MemoryStore:
         )
         try:
             db.execute("DELETE FROM knowledge_fts WHERE knowledge_ref=?", (ref,))
-            db.execute("INSERT INTO knowledge_fts VALUES(?,?,?,?,?)", (ref, original, bigrams, chars, terms))
+            db.execute(
+                "INSERT INTO knowledge_fts VALUES(?,?,?,?,?)",
+                (ref, original, bigrams, chars, terms),
+            )
         except sqlite3.OperationalError:
             pass
 
@@ -314,9 +386,7 @@ class MemoryStore:
 
     def _record_knowledge_in_tx(self, db: sqlite3.Connection, payload: dict) -> dict:
         node_id = payload.get("node_id")
-        if node_id and not db.execute(
-            "SELECT 1 FROM nodes WHERE node_id=?", (node_id,)
-        ).fetchone():
+        if node_id and not db.execute("SELECT 1 FROM nodes WHERE node_id=?", (node_id,)).fetchone():
             raise NotFoundError(f"Unknown node: {node_id}")
         evidence = payload.get("evidence_refs", [])
         dependencies = payload.get("dependencies", [])
@@ -325,8 +395,7 @@ class MemoryStore:
         kid = self._next(db, "knowledge", "K")
         at = _now()
         db.execute(
-            "INSERT INTO knowledge_entries VALUES(?,?,?,?)",
-            (kid, payload["kind"], node_id, at),
+            "INSERT INTO knowledge_entries VALUES(?,?,?,?)", (kid, payload["kind"], node_id, at),
         )
         db.execute(
             "INSERT INTO knowledge_revisions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -345,7 +414,9 @@ class MemoryStore:
                 at,
                 payload.get("source_sequence")
                 if payload.get("source_sequence") is not None
-                else int(db.execute("SELECT COALESCE(MAX(event_id),0)+1 FROM events").fetchone()[0]),
+                else int(
+                    db.execute("SELECT COALESCE(MAX(event_id),0)+1 FROM events").fetchone()[0]
+                ),
             ),
         )
         value = self._decode_knowledge(self._latest_revision(db, kid))
@@ -357,14 +428,30 @@ class MemoryStore:
         ref = _require_text(fields.get("ref"), "ref")
         kid, referenced_revision = parse_knowledge_ref(ref)
         expected = int(fields.get("expected_revision", referenced_revision))
-        payload = {"ref": ref, "expected_revision": expected, "changes": _json_value(fields.get("changes"), "changes", {}), "reason": _require_text(fields.get("reason"), "reason"), "source_identity": _json_value(fields.get("source_identity"), "source_identity", {})}
+        payload = {
+            "ref": ref,
+            "expected_revision": expected,
+            "changes": _json_value(fields.get("changes"), "changes", {}),
+            "reason": _require_text(fields.get("reason"), "reason"),
+            "source_identity": _json_value(fields.get("source_identity"), "source_identity", {}),
+        }
 
         def work(db: sqlite3.Connection) -> dict:
             current = self._decode_knowledge(self._latest_revision(db, kid))
             if current["revision"] != expected:
-                raise ConflictError(f"knowledge revision conflict: expected {expected}, current {current['revision']}")
+                raise ConflictError(
+                    f"knowledge revision conflict: expected {expected}, current {current['revision']}"
+                )
             changes = payload["changes"]
-            allowed = {"statement", "scope", "conditions", "status", "evidence_refs", "dependencies", "author"}
+            allowed = {
+                "statement",
+                "scope",
+                "conditions",
+                "status",
+                "evidence_refs",
+                "dependencies",
+                "author",
+            }
             if not isinstance(changes, dict) or set(changes) - allowed:
                 raise ValidationError("Unsupported knowledge revision fields")
             value = {**current, **changes}
@@ -375,7 +462,9 @@ class MemoryStore:
                 value[key] = _json_value(value[key], key, {})
             for key in ("evidence_refs", "dependencies"):
                 value[key] = _json_value(value[key], key, [])
-                if not isinstance(value[key], list) or not all(isinstance(x, str) for x in value[key]):
+                if not isinstance(value[key], list) or not all(
+                    isinstance(x, str) for x in value[key]
+                ):
                     raise ValidationError(f"{key} must be strings")
                 self._validate_evidence(db, value[key])
             revision = current["revision"] + 1
@@ -383,11 +472,29 @@ class MemoryStore:
             supersedes = [current["ref"]]
             db.execute(
                 "INSERT INTO knowledge_revisions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (kid, revision, value["statement"], _encoded(value["scope"]), _encoded(value["conditions"]), value["status"], _encoded(value["evidence_refs"]), _encoded(payload["source_identity"]), _encoded(value["dependencies"]), _encoded(supersedes), value.get("author", current["author"]), at, int(db.execute("SELECT COALESCE(MAX(event_id),0)+1 FROM events").fetchone()[0])),
+                (
+                    kid,
+                    revision,
+                    value["statement"],
+                    _encoded(value["scope"]),
+                    _encoded(value["conditions"]),
+                    value["status"],
+                    _encoded(value["evidence_refs"]),
+                    _encoded(payload["source_identity"]),
+                    _encoded(value["dependencies"]),
+                    _encoded(supersedes),
+                    value.get("author", current["author"]),
+                    at,
+                    int(db.execute("SELECT COALESCE(MAX(event_id),0)+1 FROM events").fetchone()[0]),
+                ),
             )
             fresh = self._decode_knowledge(self._latest_revision(db, kid))
             self._index_knowledge(db, fresh)
-            self._event(db, "knowledge.revised", {"ref": fresh["ref"], "supersedes": current["ref"], "reason": payload["reason"]})
+            self._event(
+                db,
+                "knowledge.revised",
+                {"ref": fresh["ref"], "supersedes": current["ref"], "reason": payload["reason"]},
+            )
             self.queue_review_in_tx(db, "knowledge-revision", fresh["ref"], fresh["node_id"])
             return fresh
 
@@ -395,21 +502,59 @@ class MemoryStore:
 
     def checkpoint(self, fields: dict, request_id: str) -> dict:
         node_id = fields.get("node_id")
-        payload = {"node_id": node_id, "state": _json_value(fields.get("state"), "state", {}), "expected_revision": fields.get("expected_revision"), "source_identity": _json_value(fields.get("source_identity"), "source_identity", {})}
+        payload = {
+            "node_id": node_id,
+            "state": _json_value(fields.get("state"), "state", {}),
+            "expected_revision": fields.get("expected_revision"),
+            "source_identity": _json_value(fields.get("source_identity"), "source_identity", {}),
+        }
 
         def work(db: sqlite3.Connection) -> dict:
-            if node_id and not db.execute("SELECT 1 FROM nodes WHERE node_id=?", (node_id,)).fetchone():
+            if (
+                node_id
+                and not db.execute("SELECT 1 FROM nodes WHERE node_id=?", (node_id,)).fetchone()
+            ):
                 raise NotFoundError(f"Unknown node: {node_id}")
-            row = db.execute("SELECT MAX(revision) revision FROM node_checkpoints WHERE node_id IS ?", (node_id,)).fetchone()
+            row = db.execute(
+                "SELECT MAX(revision) revision FROM node_checkpoints WHERE node_id IS ?", (node_id,)
+            ).fetchone()
             current = int(row["revision"] or 0)
-            if payload["expected_revision"] is not None and int(payload["expected_revision"]) != current:
-                raise ConflictError(f"checkpoint revision conflict: expected {payload['expected_revision']}, current {current}")
+            if (
+                payload["expected_revision"] is not None
+                and int(payload["expected_revision"]) != current
+            ):
+                raise ConflictError(
+                    f"checkpoint revision conflict: expected {payload['expected_revision']}, current {current}"
+                )
             revision = current + 1
-            cid = "CP-" + hashlib.sha256((request_id + ":" + str(revision)).encode()).hexdigest()[:20]
+            cid = (
+                "CP-" + hashlib.sha256((request_id + ":" + str(revision)).encode()).hexdigest()[:20]
+            )
             at = _now()
-            db.execute("INSERT INTO node_checkpoints VALUES(?,?,?,?,?,?)", (cid, node_id, revision, _encoded(payload["state"]), _encoded(payload["source_identity"]), at))
-            value = {"checkpoint_id": cid, "node_id": node_id, "revision": revision, "state": payload["state"], "source_identity": payload["source_identity"], "created_at": at}
-            self._event(db, "memory.checkpointed", {"checkpoint_id": cid, "node_id": node_id, "revision": revision})
+            db.execute(
+                "INSERT INTO node_checkpoints VALUES(?,?,?,?,?,?)",
+                (
+                    cid,
+                    node_id,
+                    revision,
+                    _encoded(payload["state"]),
+                    _encoded(payload["source_identity"]),
+                    at,
+                ),
+            )
+            value = {
+                "checkpoint_id": cid,
+                "node_id": node_id,
+                "revision": revision,
+                "state": payload["state"],
+                "source_identity": payload["source_identity"],
+                "created_at": at,
+            }
+            self._event(
+                db,
+                "memory.checkpointed",
+                {"checkpoint_id": cid, "node_id": node_id, "revision": revision},
+            )
             return value
 
         return self._mutate("memory.checkpoint", payload, request_id, work)
@@ -436,13 +581,26 @@ class MemoryStore:
                 "UPDATE review_todos SET state=?,updated_at=? WHERE todo_id=?",
                 (state, _now(), todo_id),
             )
-            value = dict(db.execute("SELECT * FROM review_todos WHERE todo_id=?", (todo_id,)).fetchone())
+            value = dict(
+                db.execute("SELECT * FROM review_todos WHERE todo_id=?", (todo_id,)).fetchone()
+            )
             self._event(db, "review.todo", {"todo_id": todo_id, "state": state})
             return value
 
         return self._mutate("review.todo", payload, request_id, work)
 
-    def knowledge_query(self, *, query: str | None = None, node_id: str | None = None, kind: str | None = None, status: str | None = None, revision: int | None = None, conditions: dict | None = None, after: int = 0, limit: int = 50) -> dict:
+    def knowledge_query(
+        self,
+        *,
+        query: str | None = None,
+        node_id: str | None = None,
+        kind: str | None = None,
+        status: str | None = None,
+        revision: int | None = None,
+        conditions: dict | None = None,
+        after: int = 0,
+        limit: int = 50,
+    ) -> dict:
         limit = max(1, min(int(limit), 200))
         after = max(0, int(after))
         if conditions is not None and not isinstance(conditions, dict):
@@ -451,7 +609,9 @@ class MemoryStore:
             clauses = ["r.rowid>?"]
             args: list[Any] = [after]
             if revision is None:
-                clauses.append("r.revision=(SELECT MAX(r2.revision) FROM knowledge_revisions r2 WHERE r2.knowledge_id=r.knowledge_id)")
+                clauses.append(
+                    "r.revision=(SELECT MAX(r2.revision) FROM knowledge_revisions r2 WHERE r2.knowledge_id=r.knowledge_id)"
+                )
             else:
                 clauses.append("r.revision=?")
                 args.append(int(revision))
@@ -473,7 +633,9 @@ class MemoryStore:
                 bigrams, chars, terms = tokenize(query)
                 candidates = []
                 if bigrams:
-                    candidates.append(("s.zh_bigrams LIKE ?", "%" + "%".join(bigrams.split()) + "%"))
+                    candidates.append(
+                        ("s.zh_bigrams LIKE ?", "%" + "%".join(bigrams.split()) + "%")
+                    )
                 if terms:
                     candidates.append(("s.terms LIKE ?", "%" + terms.split()[0] + "%"))
                 if chars and len(query.strip()) == 1:
@@ -481,44 +643,148 @@ class MemoryStore:
                 candidates.append(("s.original LIKE ?", f"%{query}%"))
                 clauses.append("(" + " OR ".join(item[0] for item in candidates) + ")")
                 args.extend(item[1] for item in candidates)
-            rows = list(db.execute(
-                "SELECT r.rowid cursor,e.kind,e.node_id,r.* FROM knowledge_entries e JOIN knowledge_revisions r USING(knowledge_id) JOIN knowledge_search s ON s.knowledge_ref=('knowledge/'||r.knowledge_id||'@'||r.revision) WHERE " + " AND ".join(clauses) + " ORDER BY r.rowid LIMIT ?",
-                (*args, limit + 1),
-            ))
-            reasons = [name for name, enabled in (("text", query), ("node", node_id), ("kind", kind), ("status", status), ("revision", revision), ("conditions", conditions)) if enabled is not None and enabled != {}]
-            items = [{**self._decode_knowledge(row), "match_reason": reasons or ["latest"]} for row in rows[:limit]]
-            return {"items": items, "next_cursor": rows[limit - 1]["cursor"] if len(rows) > limit else None, "has_more": len(rows) > limit}
+            rows = list(
+                db.execute(
+                    "SELECT r.rowid cursor,e.kind,e.node_id,r.* FROM knowledge_entries e JOIN knowledge_revisions r USING(knowledge_id) JOIN knowledge_search s ON s.knowledge_ref=('knowledge/'||r.knowledge_id||'@'||r.revision) WHERE "
+                    + " AND ".join(clauses)
+                    + " ORDER BY r.rowid LIMIT ?",
+                    (*args, limit + 1),
+                )
+            )
+            reasons = [
+                name
+                for name, enabled in (
+                    ("text", query),
+                    ("node", node_id),
+                    ("kind", kind),
+                    ("status", status),
+                    ("revision", revision),
+                    ("conditions", conditions),
+                )
+                if enabled is not None and enabled != {}
+            ]
+            items = [
+                {**self._decode_knowledge(row), "match_reason": reasons or ["latest"]}
+                for row in rows[:limit]
+            ]
+            return {
+                "items": items,
+                "next_cursor": rows[limit - 1]["cursor"] if len(rows) > limit else None,
+                "has_more": len(rows) > limit,
+            }
 
     def context_view(self, host_id: str, session_id: str, max_chars: int = 12_000) -> dict:
         with self._read() as db:
             project = self._project(db)
-            association = db.execute("SELECT * FROM associations WHERE host_id=? AND session_id=? AND ended_at IS NULL", (host_id, session_id)).fetchone()
+            association = db.execute(
+                "SELECT * FROM associations WHERE host_id=? AND session_id=? AND ended_at IS NULL",
+                (host_id, session_id),
+            ).fetchone()
             if not association:
                 raise NotFoundError("Session is not associated with this project")
-            session = db.execute("SELECT * FROM workflow_sessions WHERE session_id=?", (session_id,)).fetchone()
-            attempt = db.execute("SELECT * FROM attempts WHERE association_id=? AND ended_at IS NULL", (association["association_id"],)).fetchone()
-            task = db.execute("SELECT * FROM exploration_tasks WHERE session_id=? AND state IN ('queued','starting','running','waiting','stopping','unverified')", (session_id,)).fetchone()
+            session = db.execute(
+                "SELECT * FROM workflow_sessions WHERE session_id=?", (session_id,)
+            ).fetchone()
+            attempt = db.execute(
+                "SELECT * FROM attempts WHERE association_id=? AND ended_at IS NULL",
+                (association["association_id"],),
+            ).fetchone()
+            task = db.execute(
+                "SELECT * FROM exploration_tasks WHERE session_id=? AND state IN ('queued','starting','running','waiting','stopping','unverified')",
+                (session_id,),
+            ).fetchone()
             specialist = db.execute(
                 "SELECT t.* FROM specialist_tasks t JOIN specialist_bindings b USING(task_id) "
                 "WHERE b.session_id=? ORDER BY t.created_at DESC LIMIT 1",
                 (session_id,),
             ).fetchone()
             node_id = attempt["node_id"] if attempt else session["node_id"] if session else None
-            node_row = db.execute(
-                "SELECT question,plan,question_ref FROM nodes WHERE node_id=?", (node_id,)
-            ).fetchone() if node_id else None
-            checkpoint = db.execute("SELECT * FROM node_checkpoints WHERE node_id IS ? ORDER BY revision DESC LIMIT 1", (node_id,)).fetchone()
-            review_todos = [dict(row) for row in db.execute(
-                "SELECT * FROM review_todos WHERE state='pending' AND (? IS NULL OR node_id IS ? OR node_id IS NULL) ORDER BY rowid LIMIT 8",
-                (node_id, node_id),
-            )]
-            knowledge = [self._decode_knowledge(row) for row in db.execute(
-                "SELECT e.kind,e.node_id,r.* FROM knowledge_entries e JOIN knowledge_revisions r USING(knowledge_id) WHERE r.revision=(SELECT MAX(r2.revision) FROM knowledge_revisions r2 WHERE r2.knowledge_id=r.knowledge_id) AND (e.node_id IS ? OR e.node_id IS NULL OR e.kind='open_question') ORDER BY CASE r.status WHEN 'disputed' THEN 0 WHEN 'working' THEN 1 ELSE 2 END,r.rowid DESC LIMIT 30",
+            node_row = (
+                db.execute(
+                    "SELECT node_id,question,plan,question_ref,inputs FROM nodes WHERE node_id=?",
+                    (node_id,),
+                ).fetchone()
+                if node_id
+                else None
+            )
+            checkpoint = db.execute(
+                "SELECT * FROM node_checkpoints WHERE node_id IS ? ORDER BY revision DESC LIMIT 1",
                 (node_id,),
-            )]
+            ).fetchone()
+            review_todos = [
+                dict(row)
+                for row in db.execute(
+                    "SELECT * FROM review_todos WHERE state='pending' AND (? IS NULL OR node_id IS ? OR node_id IS NULL) ORDER BY rowid LIMIT 8",
+                    (node_id, node_id),
+                )
+            ]
+            # Fixed inputs determine provenance. Global question recency must never
+            # crowd out an input's early negative results or later corrections.
+            related_nodes = {node_id} if node_id else set()
+            pinned = []
+            inputs = json.loads(node_row["inputs"]) if node_row else []
+            if specialist:
+                inputs += json.loads(specialist["inputs"])
+            for ref in inputs:
+                if ref.startswith("knowledge/"):
+                    pinned.append(ref)
+                elif ref.startswith("pub/"):
+                    pid = ref[4:].split("#", 1)[0]
+                    pub = db.execute(
+                        "SELECT node_id FROM publications WHERE publication_id=?", (pid,)
+                    ).fetchone()
+                    if pub and pub["node_id"]:
+                        related_nodes.add(pub["node_id"])
+                    pinned.extend(
+                        _knowledge_ref(r["knowledge_id"], r["revision"])
+                        for r in db.execute(
+                            "SELECT knowledge_id,revision FROM publication_knowledge WHERE publication_id=? ORDER BY knowledge_id",
+                            (pid,),
+                        )
+                    )
+                elif db.execute("SELECT 1 FROM nodes WHERE node_id=?", (ref,)).fetchone():
+                    related_nodes.add(ref)
+            selected = {}
+            for ref in pinned[:16]:
+                kid, rev = parse_knowledge_ref(ref)
+                row = db.execute(
+                    "SELECT e.kind,e.node_id,r.* FROM knowledge_entries e JOIN knowledge_revisions r USING(knowledge_id) WHERE r.knowledge_id=? AND r.revision=?",
+                    (kid, rev),
+                ).fetchone()
+                if row:
+                    selected[ref] = self._decode_knowledge(row)
+                    # Keep the fixed version and its later correction side by side.
+                    latest = self._decode_knowledge(self._latest_revision(db, kid))
+                    selected[latest["ref"]] = latest
+                    if row["node_id"]:
+                        related_nodes.add(row["node_id"])
+            related_json = _encoded(sorted(related_nodes))
+            for row in db.execute(
+                "SELECT e.kind,e.node_id,r.* FROM knowledge_entries e JOIN knowledge_revisions r USING(knowledge_id) "
+                "WHERE r.revision=(SELECT MAX(r2.revision) FROM knowledge_revisions r2 WHERE r2.knowledge_id=r.knowledge_id) "
+                "AND e.kind!='open_question' AND (e.node_id IS NULL OR e.node_id IN (SELECT value FROM json_each(?)) OR r.status='disputed') "
+                "ORDER BY CASE WHEN r.status='disputed' THEN 0 WHEN r.revision>1 THEN 1 WHEN e.kind='lesson' THEN 2 ELSE 3 END,r.rowid DESC LIMIT 24",
+                (related_json,),
+            ):
+                value = self._decode_knowledge(row)
+                selected.setdefault(value["ref"], value)
+            knowledge = list(selected.values())
+            questions = [
+                dict(r)
+                for r in db.execute(
+                    "SELECT node_id,question,question_ref FROM nodes WHERE node_id IN (SELECT value FROM json_each(?)) ORDER BY CASE WHEN node_id=? THEN 0 ELSE 1 END,rowid LIMIT 6",
+                    (related_json, node_id),
+                )
+            ]
             notes = []
             if attempt:
-                notes = [dict(row) for row in db.execute("SELECT * FROM notes WHERE attempt_id=? ORDER BY rowid DESC LIMIT 8", (attempt["attempt_id"],))]
+                notes = [
+                    dict(row)
+                    for row in db.execute(
+                        "SELECT * FROM notes WHERE attempt_id=? ORDER BY rowid DESC LIMIT 8",
+                        (attempt["attempt_id"],),
+                    )
+                ]
             guidance = db.execute(
                 "SELECT * FROM guidance_sources WHERE active=1 ORDER BY created_at DESC LIMIT 1"
             ).fetchone()
@@ -559,31 +825,125 @@ class MemoryStore:
                 if len(_encoded(frozen_context)) > 6000:
                     frozen_context = {
                         key: frozen_context[key]
-                        for key in ("role", "goal", "node", "record_path", "publication_ids", "instruction", "source_snapshot", "source_attempt")
+                        for key in (
+                            "role",
+                            "goal",
+                            "node",
+                            "record_path",
+                            "publication_ids",
+                            "instruction",
+                            "source_snapshot",
+                            "source_attempt",
+                        )
                         if key in frozen_context
                     }
                     if isinstance(frozen_context.get("goal"), str):
                         frozen_context["goal"] = frozen_context["goal"][:1000]
             blocks = [
                 ("project", {"goal": project["goal"], "control": project["control"]}),
-                ("identity", {"role": session["role"] if session else "legacy", "node_id": node_id, "permissions": "research-read-only" if session and session["role"] in {"discussion", "handoff", "specialist"} else "research-read-write"}),
-                ("frozen_context", frozen_context),
-                ("task", json.loads(task["context"]) if task else None),
+                (
+                    "identity",
+                    {
+                        "role": session["role"] if session else "legacy",
+                        "node_id": node_id,
+                        "permissions": "research-read-only"
+                        if session and session["role"] in {"discussion", "handoff", "specialist"}
+                        else "research-read-write",
+                    },
+                ),
+                (
+                    "task",
+                    json.loads(task["context"])
+                    if task
+                    else (
+                        {k: node_row[k] for k in ("node_id", "question", "plan", "question_ref")}
+                        if node_row
+                        else None
+                    ),
+                ),
                 ("specialist_task", self._decode_specialist(specialist) if specialist else None),
-                ("attempt", {k: attempt[k] for k in ("attempt_id", "node_id", "role", "mode", "state")} if attempt else None),
-                ("checkpoint", {**dict(checkpoint), "state": json.loads(checkpoint["state"]), "source_identity": json.loads(checkpoint["source_identity"])} if checkpoint else None),
+                (
+                    "attempt",
+                    {k: attempt[k] for k in ("attempt_id", "node_id", "role", "mode", "state")}
+                    if attempt
+                    else None,
+                ),
+                ("knowledge", knowledge),
+                ("questions", questions),
+                ("frozen_context", frozen_context),
+                (
+                    "checkpoint",
+                    {
+                        **dict(checkpoint),
+                        "state": json.loads(checkpoint["state"]),
+                        "source_identity": json.loads(checkpoint["source_identity"]),
+                    }
+                    if checkpoint
+                    else None,
+                ),
                 ("pending_review", review_todos),
                 ("method_guidance", guidance_cards),
-                ("knowledge", knowledge),
                 ("recent_node_notes", list(reversed(notes))),
-                ("index", {"query": "Use research_query with query/kind/node_id/cursor to expand project memory."}),
+                (
+                    "index",
+                    {
+                        "query": "Use research_query with query/kind/node_id/cursor to expand project memory."
+                    },
+                ),
             ]
             rendered: list[str] = []
             omitted: list[str] = []
             used = 0
+            included_refs = []
+            max_chars = max(500, min(max_chars, 12000))
             for name, value in blocks:
                 if value is None or value == []:
                     continue
+                allowance = min(
+                    max_chars - used - 150,
+                    {
+                        "project": 1000,
+                        "identity": 400,
+                        "task": 2200,
+                        "specialist_task": 1400,
+                        "attempt": 400,
+                        "knowledge": 4000,
+                        "questions": 800,
+                        "frozen_context": 1600,
+                    }.get(name, 1000),
+                )
+                if allowance < 100:
+                    omitted.append(name)
+                    continue
+                if name == "knowledge":
+                    entries = []
+                    for item in value:
+                        compact = {
+                            key: item[key]
+                            for key in (
+                                "ref",
+                                "kind",
+                                "statement",
+                                "scope",
+                                "conditions",
+                                "status",
+                                "evidence_refs",
+                                "dependencies",
+                                "supersedes",
+                            )
+                        }
+                        entry = bounded_value(
+                            compact, min(1000, allowance - len(_encoded(entries)) - 100)
+                        )
+                        if len(_encoded(entries + [entry])) > allowance - 80:
+                            break
+                        entries.append(entry)
+                        included_refs.append(item["ref"])
+                        if allowance - len(_encoded(entries)) < 500:
+                            break
+                    value = {"items": entries, "omitted_count": len(knowledge) - len(entries)}
+                else:
+                    value = bounded_value(value, allowance)
                 text = f"## {name}\n{_encoded(value)}"
                 if used + len(text) + 2 <= max_chars:
                     rendered.append(text)
@@ -595,24 +955,39 @@ class MemoryStore:
             body = "\n\n".join(rendered)
             digest = hashlib.sha256(body.encode()).hexdigest()
             upper = int(db.execute("SELECT COALESCE(MAX(event_id),0) FROM events").fetchone()[0])
-            dependencies = [item["ref"] for item in knowledge]
+            dependencies = included_refs
             if node_row and node_row["question_ref"]:
                 dependencies.append(node_row["question_ref"])
             if checkpoint:
-                dependencies.append(f"checkpoint/{checkpoint['checkpoint_id']}@{checkpoint['revision']}")
+                dependencies.append(
+                    f"checkpoint/{checkpoint['checkpoint_id']}@{checkpoint['revision']}"
+                )
             if guidance:
-                dependencies.append(f"guidance/{guidance['guidance_id']}@{guidance['content_hash']}")
+                dependencies.append(
+                    f"guidance/{guidance['guidance_id']}@{guidance['content_hash']}"
+                )
             if task:
                 dependencies.append(f"exploration/{task['task_id']}")
             if specialist:
                 dependencies.append(f"specialist/{specialist['task_id']}")
             if frozen_context:
-                dependencies.append("frozen/" + hashlib.sha256(_encoded(frozen_context).encode()).hexdigest())
-            return {"text": body, "source_digest": digest, "dependencies": sorted(set(dependencies)), "truncated": bool(omitted), "omitted": omitted, "source_sequence": upper}
+                dependencies.append(
+                    "frozen/" + hashlib.sha256(_encoded(frozen_context).encode()).hexdigest()
+                )
+            return {
+                "text": body,
+                "source_digest": digest,
+                "dependencies": sorted(set(dependencies)),
+                "truncated": bool(omitted),
+                "omitted": omitted,
+                "source_sequence": upper,
+            }
 
     def record_context_request(self, fields: dict, request_id: str) -> dict:
         body = fields["body"]
-        pack_id = hashlib.sha256((fields.get("policy_version", "memory-v2") + "\0" + body).encode()).hexdigest()
+        pack_id = hashlib.sha256(
+            (fields.get("policy_version", "memory-v2") + "\0" + body).encode()
+        ).hexdigest()
         with self._connection() as db:
             db.execute("BEGIN IMMEDIATE")
             try:
@@ -623,8 +998,32 @@ class MemoryStore:
                 if previous:
                     db.commit()
                     return dict(previous)
-                db.execute("INSERT OR IGNORE INTO context_packs VALUES(?,?,?,?,?)", (pack_id, body, _encoded(fields.get("dependencies", [])), fields.get("policy_version", "memory-v2"), _now()))
-                db.execute("INSERT INTO context_requests(operation_id,host_id,session_id,turn,step,purpose,pack_id,source_sequence,selection,size_estimate,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)", (request_id, fields["host_id"], fields["session_id"], fields.get("turn"), fields.get("step"), fields.get("purpose"), pack_id, fields.get("source_sequence"), _encoded(fields.get("selection", {})), len(body), _now()))
+                db.execute(
+                    "INSERT OR IGNORE INTO context_packs VALUES(?,?,?,?,?)",
+                    (
+                        pack_id,
+                        body,
+                        _encoded(fields.get("dependencies", [])),
+                        fields.get("policy_version", "memory-v2"),
+                        _now(),
+                    ),
+                )
+                db.execute(
+                    "INSERT INTO context_requests(operation_id,host_id,session_id,turn,step,purpose,pack_id,source_sequence,selection,size_estimate,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        request_id,
+                        fields["host_id"],
+                        fields["session_id"],
+                        fields.get("turn"),
+                        fields.get("step"),
+                        fields.get("purpose"),
+                        pack_id,
+                        fields.get("source_sequence"),
+                        _encoded(fields.get("selection", {})),
+                        len(body),
+                        _now(),
+                    ),
+                )
                 context_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
                 db.commit()
                 return {"context_id": context_id, "pack_id": pack_id}
@@ -637,11 +1036,30 @@ class MemoryStore:
         root.mkdir(parents=True, exist_ok=True)
         with self._read() as db:
             project = self._project(db)
-            knowledge = [self._decode_knowledge(row) for row in db.execute("SELECT e.kind,e.node_id,r.* FROM knowledge_entries e JOIN knowledge_revisions r USING(knowledge_id) WHERE r.revision=(SELECT MAX(revision) FROM knowledge_revisions WHERE knowledge_id=e.knowledge_id) ORDER BY e.rowid")]
+            knowledge = [
+                self._decode_knowledge(row)
+                for row in db.execute(
+                    "SELECT e.kind,e.node_id,r.* FROM knowledge_entries e JOIN knowledge_revisions r USING(knowledge_id) WHERE r.revision=(SELECT MAX(revision) FROM knowledge_revisions WHERE knowledge_id=e.knowledge_id) ORDER BY e.rowid"
+                )
+            ]
             sequence = int(db.execute("SELECT COALESCE(MAX(event_id),0) FROM events").fetchone()[0])
-        lines = ["# Project memory", "", f"Goal: {project['goal']}", "", f"Source sequence: {sequence}", "", "## Knowledge"]
+        lines = [
+            "# Project memory",
+            "",
+            f"Goal: {project['goal']}",
+            "",
+            f"Source sequence: {sequence}",
+            "",
+            "## Knowledge",
+        ]
         for item in knowledge:
-            lines.extend(["", f"- {item['ref']} · {item['kind']} · {item['status']}", f"  {item['statement']}"])
+            lines.extend(
+                [
+                    "",
+                    f"- {item['ref']} · {item['kind']} · {item['status']}",
+                    f"  {item['statement']}",
+                ]
+            )
         body = "\n".join(lines) + "\n"
         digest = hashlib.sha256(body.encode()).hexdigest()
         body = f"<!-- projection-sha256: {digest} -->\n" + body
@@ -667,31 +1085,76 @@ class MemoryStore:
         temporary.replace(target)
 
     def specialist_create(self, fields: dict, request_id: str) -> dict:
-        payload = {"parent_session_id": _require_text(fields.get("parent_session_id"), "parent_session_id"), "node_id": fields.get("node_id"), "attempt_id": fields.get("attempt_id"), "purpose": _require_text(fields.get("purpose"), "purpose"), "label": _require_text(fields.get("label"), "label"), "prompt": _require_text(fields.get("prompt"), "prompt"), "inputs": _json_value(fields.get("inputs"), "inputs", []), "fanout_limit": int(fields.get("fanout_limit", 2))}
+        payload = {
+            "parent_session_id": _require_text(
+                fields.get("parent_session_id"), "parent_session_id"
+            ),
+            "node_id": fields.get("node_id"),
+            "attempt_id": fields.get("attempt_id"),
+            "purpose": _require_text(fields.get("purpose"), "purpose"),
+            "label": _require_text(fields.get("label"), "label"),
+            "prompt": _require_text(fields.get("prompt"), "prompt"),
+            "inputs": _json_value(fields.get("inputs"), "inputs", []),
+            "fanout_limit": int(fields.get("fanout_limit", 2)),
+        }
+
         def work(db: sqlite3.Connection) -> dict:
             if payload["purpose"] not in {"review", "domain"}:
                 raise ValidationError("Specialist purpose must be review or domain")
-            if payload["node_id"] and not db.execute(
-                "SELECT 1 FROM nodes WHERE node_id=?", (payload["node_id"],)
-            ).fetchone():
+            if (
+                payload["node_id"]
+                and not db.execute(
+                    "SELECT 1 FROM nodes WHERE node_id=?", (payload["node_id"],)
+                ).fetchone()
+            ):
                 raise NotFoundError("Unknown specialist node")
             if not isinstance(payload["inputs"], list) or not all(
                 isinstance(ref, str) for ref in payload["inputs"]
             ):
                 raise ValidationError("Specialist inputs must be research references")
             self._validate_evidence(db, payload["inputs"])
-            existing = db.execute("SELECT * FROM specialist_tasks WHERE operation_id=?", (request_id,)).fetchone()
+            existing = db.execute(
+                "SELECT * FROM specialist_tasks WHERE operation_id=?", (request_id,)
+            ).fetchone()
             if existing:
                 return self._decode_specialist(existing)
             if not 1 <= payload["fanout_limit"] <= 8:
                 raise ValidationError("Specialist fan-out limit must be between 1 and 8")
-            active = db.execute("SELECT COUNT(*) FROM specialist_tasks WHERE node_id IS ? AND state IN ('starting','running','unverified')", (payload["node_id"],)).fetchone()[0]
+            active = db.execute(
+                "SELECT COUNT(*) FROM specialist_tasks WHERE node_id IS ? AND state IN ('starting','running','unverified')",
+                (payload["node_id"],),
+            ).fetchone()[0]
             if active >= payload["fanout_limit"]:
-                raise ConflictError(f"The node specialist fan-out limit ({payload['fanout_limit']}) is reached")
+                raise ConflictError(
+                    f"The node specialist fan-out limit ({payload['fanout_limit']}) is reached"
+                )
             task_id = "S-" + hashlib.sha256(request_id.encode()).hexdigest()[:20]
             at = _now()
-            db.execute("INSERT INTO specialist_tasks VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (task_id, request_id, payload["parent_session_id"], None, payload["node_id"], payload["attempt_id"], payload["purpose"], payload["label"], payload["prompt"], _encoded(payload["inputs"]), "starting", None, None, 0, at, at))
-            return self._decode_specialist(db.execute("SELECT * FROM specialist_tasks WHERE task_id=?", (task_id,)).fetchone())
+            db.execute(
+                "INSERT INTO specialist_tasks VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    task_id,
+                    request_id,
+                    payload["parent_session_id"],
+                    None,
+                    payload["node_id"],
+                    payload["attempt_id"],
+                    payload["purpose"],
+                    payload["label"],
+                    payload["prompt"],
+                    _encoded(payload["inputs"]),
+                    "starting",
+                    None,
+                    None,
+                    0,
+                    at,
+                    at,
+                ),
+            )
+            return self._decode_specialist(
+                db.execute("SELECT * FROM specialist_tasks WHERE task_id=?", (task_id,)).fetchone()
+            )
+
         return self._mutate("specialist.create", payload, request_id, work)
 
     @staticmethod
@@ -703,18 +1166,48 @@ class MemoryStore:
         return value
 
     def specialist_bind(self, fields: dict, request_id: str) -> dict:
-        payload = {"task_id": _require_text(fields.get("task_id"), "task_id"), "session_id": _require_text(fields.get("session_id"), "session_id"), "parent_session_id": _require_text(fields.get("parent_session_id"), "parent_session_id")}
+        payload = {
+            "task_id": _require_text(fields.get("task_id"), "task_id"),
+            "session_id": _require_text(fields.get("session_id"), "session_id"),
+            "parent_session_id": _require_text(
+                fields.get("parent_session_id"), "parent_session_id"
+            ),
+        }
+
         def work(db: sqlite3.Connection) -> dict:
-            task = db.execute("SELECT * FROM specialist_tasks WHERE task_id=?", (payload["task_id"],)).fetchone()
+            task = db.execute(
+                "SELECT * FROM specialist_tasks WHERE task_id=?", (payload["task_id"],)
+            ).fetchone()
             if not task or task["parent_session_id"] != payload["parent_session_id"]:
                 raise ConflictError("Specialist lineage does not match the durable intent")
-            existing = db.execute("SELECT * FROM specialist_bindings WHERE session_id=?", (payload["session_id"],)).fetchone()
+            existing = db.execute(
+                "SELECT * FROM specialist_bindings WHERE session_id=?", (payload["session_id"],)
+            ).fetchone()
             if existing and existing["task_id"] != payload["task_id"]:
                 raise ConflictError("Specialist session is already bound")
             at = _now()
-            db.execute("INSERT OR IGNORE INTO specialist_bindings VALUES(?,?,?,?,?,?,?)", (payload["session_id"], payload["task_id"], payload["parent_session_id"], task["node_id"], task["attempt_id"], "read-only", at))
-            db.execute("UPDATE specialist_tasks SET child_session_id=?,state='running',updated_at=? WHERE task_id=?", (payload["session_id"], at, payload["task_id"]))
-            return {"task_id": payload["task_id"], "session_id": payload["session_id"], "permission": "read-only"}
+            db.execute(
+                "INSERT OR IGNORE INTO specialist_bindings VALUES(?,?,?,?,?,?,?)",
+                (
+                    payload["session_id"],
+                    payload["task_id"],
+                    payload["parent_session_id"],
+                    task["node_id"],
+                    task["attempt_id"],
+                    "read-only",
+                    at,
+                ),
+            )
+            db.execute(
+                "UPDATE specialist_tasks SET child_session_id=?,state='running',updated_at=? WHERE task_id=?",
+                (payload["session_id"], at, payload["task_id"]),
+            )
+            return {
+                "task_id": payload["task_id"],
+                "session_id": payload["session_id"],
+                "permission": "read-only",
+            }
+
         return self._mutate("specialist.bind", payload, request_id, work)
 
     def specialist_get(self, task_id: str) -> dict:
@@ -727,20 +1220,56 @@ class MemoryStore:
             return self._decode_specialist(row)
 
     def specialist_finish(self, fields: dict, request_id: str) -> dict:
-        payload = {"task_id": _require_text(fields.get("task_id"), "task_id"), "parent_session_id": fields.get("parent_session_id"), "state": fields.get("state", "completed"), "result": _json_value(fields.get("result"), "result", {}), "error": fields.get("error"), "exit_verified": bool(fields.get("exit_verified"))}
+        payload = {
+            "task_id": _require_text(fields.get("task_id"), "task_id"),
+            "parent_session_id": fields.get("parent_session_id"),
+            "state": fields.get("state", "completed"),
+            "result": _json_value(fields.get("result"), "result", {}),
+            "error": fields.get("error"),
+            "exit_verified": bool(fields.get("exit_verified")),
+        }
         if payload["state"] not in {"completed", "incomplete", "cancelled", "unverified"}:
             raise ValidationError("Invalid specialist terminal state")
+
         def work(db: sqlite3.Connection) -> dict:
-            task = db.execute("SELECT * FROM specialist_tasks WHERE task_id=?", (payload["task_id"],)).fetchone()
+            task = db.execute(
+                "SELECT * FROM specialist_tasks WHERE task_id=?", (payload["task_id"],)
+            ).fetchone()
             if not task:
                 raise NotFoundError("Unknown specialist task")
-            if payload["parent_session_id"] and task["parent_session_id"] != payload["parent_session_id"]:
+            if (
+                payload["parent_session_id"]
+                and task["parent_session_id"] != payload["parent_session_id"]
+            ):
                 raise ConflictError("Only the recorded parent can settle this specialist task")
             at = _now()
-            db.execute("UPDATE specialist_tasks SET state=?,result=?,error=?,exit_verified=?,updated_at=? WHERE task_id=?", (payload["state"], _encoded(payload["result"]), payload["error"], int(payload["exit_verified"]), at, payload["task_id"]))
-            value = self._decode_specialist(db.execute("SELECT * FROM specialist_tasks WHERE task_id=?", (payload["task_id"],)).fetchone())
-            self._event(db, "specialist.finished", {"task_id": value["task_id"], "state": value["state"], "exit_verified": value["exit_verified"]})
+            db.execute(
+                "UPDATE specialist_tasks SET state=?,result=?,error=?,exit_verified=?,updated_at=? WHERE task_id=?",
+                (
+                    payload["state"],
+                    _encoded(payload["result"]),
+                    payload["error"],
+                    int(payload["exit_verified"]),
+                    at,
+                    payload["task_id"],
+                ),
+            )
+            value = self._decode_specialist(
+                db.execute(
+                    "SELECT * FROM specialist_tasks WHERE task_id=?", (payload["task_id"],)
+                ).fetchone()
+            )
+            self._event(
+                db,
+                "specialist.finished",
+                {
+                    "task_id": value["task_id"],
+                    "state": value["state"],
+                    "exit_verified": value["exit_verified"],
+                },
+            )
             return value
+
         return self._mutate("specialist.finish", payload, request_id, work)
 
     def guidance_register(self, fields: dict, request_id: str) -> dict:

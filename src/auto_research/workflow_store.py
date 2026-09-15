@@ -137,6 +137,79 @@ def migrate_schema3(path: Path):
 
 
 class WorkflowStore:
+    def workflow_control(self, db, session_id=None, cursors=None):
+        """SQL-selected lifecycle facts. History and task bodies have separate reads."""
+        cursors = cursors or {}
+        live = "('queued','starting','running','waiting','stopping','unverified')"
+        session_filter = (
+            """detached=0 AND (
+            role='main' OR session_id=? OR
+            (role='exploration' AND (
+                session_id IN (SELECT session_id FROM exploration_tasks WHERE state IN %s)
+                OR session_id IN (SELECT a.session_id FROM associations a JOIN attempts t USING(association_id) WHERE t.ended_at IS NULL)
+                OR COALESCE(pause_reason,'') NOT IN ('finished','complete','stop','legacy_history')))
+            OR (role='specialist' AND session_id IN (SELECT child_session_id FROM specialist_tasks WHERE state IN ('starting','running','unverified')))
+        )"""
+            % live
+        )
+        specs = {
+            "sessions": ("workflow_sessions", session_filter, (session_id,)),
+            "tasks": ("exploration_tasks", f"state IN {live} OR session_id=?", (session_id,)),
+            "notifications": (
+                "workflow_notifications",
+                "state='pending' OR (state='delivered' AND task_id IN (SELECT j.value FROM workflow_sessions w,json_each(w.waiting) j WHERE w.detached=0 AND w.pause_reason IN ('wait','project_wait')))",
+                (),
+            ),
+            "intents": ("workflow_intents", "session_id=? AND kind='jobs'", (session_id,)),
+        }
+        result, next_cursors = {}, {}
+        for name, (table, where, args) in specs.items():
+            columns = (
+                "*"
+                if name != "sessions"
+                else "session_id,host_id,role,node_id,cwd,pause_reason,waiting,goal_id,goal_revision,detached,created_at"
+            )
+            if name == "tasks":
+                columns = "task_id,operation_id,parent_session_id,node_id,session_id,state,cwd,error,generation,created_at,updated_at"
+            rows = list(
+                db.execute(
+                    f"SELECT rowid AS _key,{columns} FROM {table} WHERE ({where}) AND rowid>? ORDER BY rowid LIMIT 101",
+                    (*args, int(cursors.get(name, 0))),
+                )
+            )
+            result[name] = []
+            for row in rows[:100]:
+                value = dict(row)
+                value.pop("_key")
+                # Do not move large research text into the control channel.
+                if name == "tasks":
+                    value.pop("context", None)
+                for key in ("waiting", "payload", "details"):
+                    if key in value:
+                        value[key] = json.loads(value[key])
+                if name == "notifications":
+                    from .memory_store import bounded_value
+
+                    value["payload"] = bounded_value(value["payload"], 4096)
+                if isinstance(value.get("error"), str):
+                    value["error"] = value["error"][:2000]
+                result[name].append(value)
+            if len(rows) > 100:
+                next_cursors[name] = rows[99]["_key"]
+        row = db.execute("SELECT * FROM workflow_project WHERE id=1").fetchone()
+        current = db.execute(
+            "SELECT session_id,host_id,role,node_id,cwd,pause_reason,waiting,goal_id,goal_revision,detached,created_at FROM workflow_sessions WHERE session_id=?",
+            (session_id,),
+        ).fetchone()
+        result.update(
+            run=dict(row) if row else None,
+            session=dict(current) if current else None,
+            cursors=next_cursors,
+        )
+        if current:
+            result["session"]["waiting"] = json.loads(current["waiting"])
+        return result
+
     @staticmethod
     def notify_in_transaction(db, session_id, fields):
         task = db.execute(
@@ -198,7 +271,7 @@ class WorkflowStore:
         payload = {"host_id": host_id, "session_id": session_id, "action": action, "fields": fields}
 
         def work(db):
-            view = self.workflow_view(db, session_id)
+            view = self.workflow_control(db, session_id)
             current = view["session"]
             at = now()
             if action == "register":
@@ -206,7 +279,14 @@ class WorkflowStore:
                     "role",
                     "main" if not view["run"] or not view["run"]["main_session_id"] else "legacy",
                 )
-                if role not in {"main", "exploration", "discussion", "handoff", "specialist", "legacy"}:
+                if role not in {
+                    "main",
+                    "exploration",
+                    "discussion",
+                    "handoff",
+                    "specialist",
+                    "legacy",
+                }:
                     raise ValidationError("Invalid session role")
                 if current:
                     db.execute(
@@ -364,6 +444,55 @@ class WorkflowStore:
                         fields["task_id"],
                     ),
                 )
+            elif action == "task_retry":
+                task = db.execute(
+                    "SELECT * FROM exploration_tasks WHERE task_id=?", (fields["task_id"],)
+                ).fetchone()
+                if not task or task["state"] not in {
+                    "failed",
+                    "unverified",
+                    "finished",
+                    "cancelled",
+                }:
+                    raise ConflictError("Task is not awaiting recovery")
+                other = db.execute(
+                    "SELECT task_id FROM exploration_tasks WHERE node_id=? AND task_id!=? AND state IN ('queued','starting','running','waiting','stopping','unverified')",
+                    (task["node_id"], task["task_id"]),
+                ).fetchone()
+                if other:
+                    raise ConflictError("Another live task already owns this node")
+                db.execute(
+                    "UPDATE exploration_tasks SET state=?,error=NULL,updated_at=? WHERE task_id=?",
+                    (
+                        "queued" if fields.get("absent_verified") else "starting",
+                        at,
+                        task["task_id"],
+                    ),
+                )
+            elif action == "task_resumed":
+                task = db.execute(
+                    "SELECT * FROM exploration_tasks WHERE task_id=? AND session_id=?",
+                    (fields["task_id"], session_id),
+                ).fetchone()
+                attempt = db.execute(
+                    "SELECT t.* FROM attempts t JOIN associations a USING(association_id) WHERE t.attempt_id=? AND a.session_id=? AND t.ended_at IS NULL",
+                    (fields["attempt_id"], session_id),
+                ).fetchone()
+                if not task or not attempt:
+                    raise ConflictError("Task and open attempt must belong to this session")
+                details = {
+                    **json.loads(attempt["details"]),
+                    "retry_of": fields.get("retry_of"),
+                    "task_id": task["task_id"],
+                }
+                db.execute(
+                    "UPDATE attempts SET details=? WHERE attempt_id=?",
+                    (encoded(details), attempt["attempt_id"]),
+                )
+                db.execute(
+                    "UPDATE exploration_tasks SET state='running',error=NULL,updated_at=? WHERE task_id=?",
+                    (at, task["task_id"]),
+                )
             elif action == "notify":
                 notice = self.notify_in_transaction(db, session_id, fields)
                 if notice.get("ignored"):
@@ -402,7 +531,7 @@ class WorkflowStore:
             else:
                 raise ValidationError(f"Unknown workflow action {action}")
             self._event(db, "workflow." + action, {"session_id": session_id, **fields})
-            return self.workflow_view(db, session_id)
+            return self.workflow_control(db, session_id)
 
         return self._mutate("workflow", payload, operation_id, work)
 

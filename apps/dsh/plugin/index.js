@@ -87,7 +87,8 @@ export function apply(ctx, config = {}) {
           return { ok: true, value: await domain.projectGoals(agent, endpoint, id) };
         }
         if (endpoint === 'resume') return { ok: true, value: await domain.resumeSession(agent, payload.targetSessionId, id) };
-        if (endpoint === 'retry') return { ok: true, value: await domain.resumeSession(agent, payload.targetSessionId, id, { retry: true }) };
+        if (endpoint === 'retry') return { ok: true, value: payload.taskId ? await domain.retryTask(agent, payload.taskId, id) : await domain.resumeSession(agent, payload.targetSessionId, id, { retry: true }) };
+        if (endpoint === 'verify-specialist') return { ok: true, value: await domain.verifySpecialist(agent, payload.taskId, id) };
         if (endpoint === 'verify-stop') return { ok: true, value: await domain.verifyStop(agent, id) };
         if (endpoint === 'focus') {
           return { ok: true, value: await domain.focus(agent, payload.nodeId ?? null, id) };

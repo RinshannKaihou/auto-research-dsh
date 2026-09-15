@@ -22,9 +22,9 @@ export function createWorkbench(React, rpc, openSession, projectGraph, ResearchG
       const life=lifecycle.current,seq=++requestSeq.current;
       try {
         const [summary,contextPreview,guidance]=await Promise.all([call('query'),call('context.preview'),call('guidance.status')]),previous=lastState.current;
-        const collections=['nodes','relations','legacy_refs','attempts','publications','notes','snapshots','restorations','associations','knowledge','checkpoints','review_todos','specialists','sessions'];
+        const collections=['nodes','relations','legacy_refs','attempts','publications','notes','snapshots','restorations','associations','knowledge','checkpoints','review_todos','specialists','sessions','tasks'];
         const loaded=await Promise.all(collections.map(async name=>{
-          if(previous&&previous.counts?.[name]===summary.counts?.[name]&&previous[name])return[name,previous[name]];
+          if(!['nodes','attempts','review_todos','specialists','sessions','tasks'].includes(name)&&previous&&previous.counts?.[name]===summary.counts?.[name]&&previous[name])return[name,previous[name]];
           return[name,await loadCollection(name)];
         }));
         const value={...summary,...Object.fromEntries(loaded),context_preview:contextPreview,guidance};
@@ -116,8 +116,8 @@ export function createWorkbench(React, rpc, openSession, projectGraph, ResearchG
           ['human','native_stop','finished','complete'].includes(s.pause_reason)&&h('button',{disabled,onClick:()=>act('resume',{targetSessionId:s.session_id})},'继续此会话'),
           ['fault','host_limit','unverified'].includes(s.pause_reason)&&h('button',{disabled,onClick:()=>act('retry',{targetSessionId:s.session_id})},'核实并重试'),
           h('details',null,h('summary',null,'关联历史与原生状态'),h('pre',null,JSON.stringify({goal:s.goal,jobs:s.jobs,intervals:state.associations.filter(a=>a.session_id===s.session_id)},null,2)))))),
-        h('details',{className:'ari-section'},h('summary',null,`节点内部协作 · ${(state.specialists??[]).length}`),...(state.specialists??[]).map(s=>h('article',{key:s.task_id},h('strong',null,`${s.task_id} · ${s.purpose} · ${s.state}`),h('p',null,`${s.label} · ${s.node_id??'项目规划'}`),s.child_session_id&&h('button',{onClick:()=>navigate(s.child_session_id)},'打开专家会话'),s.error&&h('p',{role:'alert'},s.error)))),
-        h('details',{className:'ari-section'},h('summary',null,'任务队列'),...(state.workflow?.tasks??[]).map(t=>h('p',{key:t.task_id},`${t.task_id} · ${t.node_id} · ${t.state}${t.error?' · '+t.error:''}`))),
+        h('details',{className:'ari-section'},h('summary',null,`节点内部协作 · ${(state.specialists??[]).length}`),...(state.specialists??[]).map(s=>h('article',{key:s.task_id},h('strong',null,`${s.task_id} · ${s.purpose} · ${s.state}`),h('p',null,`${s.label} · ${s.node_id??'项目规划'}`),s.child_session_id&&h('button',{onClick:()=>navigate(s.child_session_id)},'打开专家会话'),s.state==='unverified'&&h('button',{disabled,onClick:()=>act('verify-specialist',{taskId:s.task_id})},'核实专家退出'),s.error&&h('p',{role:'alert'},s.error)))),
+        h('details',{className:'ari-section'},h('summary',null,'探索任务与恢复'),...(state.tasks??state.workflow?.tasks??[]).map(t=>h('article',{key:t.task_id},h('p',null,`${t.task_id} · ${t.node_id} · ${t.state}${t.error?' · '+t.error:''}`),['failed','unverified'].includes(t.state)&&h('button',{disabled,onClick:()=>act('retry',{taskId:t.task_id})},'核实并重试创建')))),
         h('details',{className:'ari-section'},h('summary',null,'高级设置'),
           h('p',null,'科研指导按内容版本登记，只在相关任务上下文中取用方法卡。'),
           state.guidance&&h('p',null,`当前指导：${state.guidance.path} · ${state.guidance.version} · ${state.guidance.content_hash}`),

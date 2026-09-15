@@ -4,6 +4,14 @@ export class SessionAdapter {
   async inspect(sessionId) {
     return this.ctx.sessionController.inspect(sessionId);
   }
+  async exists(sessionId) {
+    try { await this.inspect(sessionId); return true; }
+    catch (error) {
+      // DSH 0.1.2 exposes this explicit absence type; IO errors are not absence.
+      if (error?.constructor?.name === 'ApiSessionNotFound') return false;
+      throw error;
+    }
+  }
   async resolve(sessionId) {
     const result = await this.ctx.sessionController.resolveAgent(sessionId);
     if (result.error) throw result.error;

@@ -69,7 +69,9 @@ class QueryStore:
                 encoded_content = json.dumps(decoded["content"], ensure_ascii=False, sort_keys=True)
                 if not full and len(encoded_content.encode("utf-8")) > 8192:
                     decoded["content"] = {
-                        "preview": encoded_content.encode("utf-8")[:8192].decode("utf-8", errors="ignore"),
+                        "preview": encoded_content.encode("utf-8")[:8192].decode(
+                            "utf-8", errors="ignore"
+                        ),
                         "truncated": True,
                         "expand_ref": decoded["ref"],
                     }
@@ -132,14 +134,26 @@ class QueryStore:
                 if isinstance(value.get(key), str):
                     value[key] = _bounded_text(value[key], expand_ref)
             for key in (
-                "content", "manifest", "details", "context", "payload", "inputs", "result",
-                "state", "scope", "conditions", "evidence_refs", "dependencies",
+                "content",
+                "manifest",
+                "details",
+                "context",
+                "payload",
+                "inputs",
+                "result",
+                "state",
+                "scope",
+                "conditions",
+                "evidence_refs",
+                "dependencies",
             ):
                 if key in value and not isinstance(value[key], str):
                     encoded = json.dumps(value[key], ensure_ascii=False, sort_keys=True)
                     if len(encoded.encode("utf-8")) > 8192:
                         value[key] = {
-                            "preview": encoded.encode("utf-8")[:8192].decode("utf-8", errors="ignore"),
+                            "preview": encoded.encode("utf-8")[:8192].decode(
+                                "utf-8", errors="ignore"
+                            ),
                             "truncated": True,
                             "expand_ref": expand_ref,
                         }
@@ -205,7 +219,9 @@ class QueryStore:
         with self._read() as db:
             if upper_id is None:
                 upper_id = int(
-                    db.execute("SELECT COALESCE(MAX(rowid),0) FROM usage_observations").fetchone()[0]
+                    db.execute("SELECT COALESCE(MAX(rowid),0) FROM usage_observations").fetchone()[
+                        0
+                    ]
                 )
             rows = list(
                 db.execute(
@@ -222,8 +238,7 @@ class QueryStore:
                 value["adjustments"] = [
                     {**dict(item), "details": json.loads(item["details"])}
                     for item in db.execute(
-                        "SELECT * FROM usage_adjustments WHERE observation_id=? "
-                        "ORDER BY rowid",
+                        "SELECT * FROM usage_adjustments WHERE observation_id=? " "ORDER BY rowid",
                         (value["observation_id"],),
                     )
                 ]
@@ -282,9 +297,14 @@ class QueryStore:
                 ).fetchone()
                 if row:
                     return {"kind": "knowledge", "value": self._decode_knowledge(row)}
-            node = db.execute("SELECT rowid AS _cursor,* FROM nodes WHERE node_id=?", (ref,)).fetchone()
+            node = db.execute(
+                "SELECT rowid AS _cursor,* FROM nodes WHERE node_id=?", (ref,)
+            ).fetchone()
             if node:
-                return {"kind": "node", "value": self._decode_page_row(db, "nodes", node, full=full)}
+                return {
+                    "kind": "node",
+                    "value": self._decode_page_row(db, "nodes", node, full=full),
+                }
             if ref.startswith("pub/"):
                 publication_id, _, item_id = ref[4:].partition("#")
                 publication = db.execute(
@@ -294,24 +314,38 @@ class QueryStore:
                 if publication:
                     decoded = self._decode_page_row(db, "publications", publication, full=full)
                     if item_id:
-                        item = next((value for value in decoded["items"] if value["item_id"] == item_id), None)
+                        item = next(
+                            (value for value in decoded["items"] if value["item_id"] == item_id),
+                            None,
+                        )
                         if item:
                             return {"kind": "publication-item", "value": item}
                     else:
                         return {"kind": "publication", "value": decoded}
-            note = db.execute("SELECT rowid AS _cursor,* FROM notes WHERE note_id=?", (ref,)).fetchone()
+            note = db.execute(
+                "SELECT rowid AS _cursor,* FROM notes WHERE note_id=?", (ref,)
+            ).fetchone()
             if note:
-                return {"kind": "note", "value": self._decode_page_row(db, "notes", note, full=full)}
+                return {
+                    "kind": "note",
+                    "value": self._decode_page_row(db, "notes", note, full=full),
+                }
             snapshot = db.execute(
                 "SELECT rowid AS _cursor,* FROM snapshots WHERE snapshot_id=?", (ref,)
             ).fetchone()
             if snapshot:
-                return {"kind": "snapshot", "value": self._decode_page_row(db, "snapshots", snapshot, full=full)}
+                return {
+                    "kind": "snapshot",
+                    "value": self._decode_page_row(db, "snapshots", snapshot, full=full),
+                }
             attempt = db.execute(
                 "SELECT rowid AS _cursor,* FROM attempts WHERE attempt_id=?", (ref,)
             ).fetchone()
             if attempt:
-                return {"kind": "attempt", "value": self._decode_page_row(db, "attempts", attempt, full=full)}
+                return {
+                    "kind": "attempt",
+                    "value": self._decode_page_row(db, "attempts", attempt, full=full),
+                }
             for kind, collection, column in (
                 ("relation", "relations", "relation_id"),
                 ("restoration", "restorations", "restoration_id"),
@@ -329,7 +363,10 @@ class QueryStore:
                     (ref,),
                 ).fetchone()
                 if row:
-                    return {"kind": kind, "value": self._decode_page_row(db, collection, row, full=full)}
+                    return {
+                        "kind": kind,
+                        "value": self._decode_page_row(db, collection, row, full=full),
+                    }
             legacy = db.execute("SELECT * FROM legacy_refs WHERE ref=?", (ref,)).fetchone()
             if legacy:
                 value = dict(legacy)
@@ -373,25 +410,7 @@ class QueryStore:
                         "SELECT * FROM owned_goals WHERE association_id=?",
                         (association["association_id"],),
                     ).fetchone()
-            workflow = self.workflow_view(db, session_id)
-            workflow["sessions"] = [
-                value for value in workflow["sessions"] if not value["detached"]
-            ]
-            workflow["tasks"] = [
-                value
-                for value in workflow["tasks"]
-                if value["state"]
-                in {"queued", "starting", "running", "waiting", "stopping", "unverified"}
-            ]
-            waiting_ids = {
-                task_id for value in workflow["sessions"] for task_id in value["waiting"]
-            }
-            workflow["notifications"] = [
-                value
-                for value in workflow["notifications"]
-                if value["state"] == "pending"
-                or (value["state"] == "delivered" and value["task_id"] in waiting_ids)
-            ]
+            workflow = self.workflow_control(db, session_id)
             usage = db.execute(
                 "SELECT COALESCE(SUM(amount),0) known,"
                 "SUM(CASE WHEN amount IS NULL THEN 1 ELSE 0 END) unknown_count,"
@@ -405,10 +424,21 @@ class QueryStore:
             }
             usage_value.update(self.workflow_usage(db))
             specialists = [
-                self._decode_specialist(row)
+                {
+                    key: row[key]
+                    for key in (
+                        "task_id",
+                        "parent_session_id",
+                        "child_session_id",
+                        "node_id",
+                        "attempt_id",
+                        "state",
+                        "exit_verified",
+                    )
+                }
                 for row in db.execute(
                     "SELECT * FROM specialist_tasks WHERE state IN ('starting','running','unverified') "
-                    "ORDER BY created_at"
+                    "ORDER BY created_at LIMIT 100"
                 )
             ]
             return {

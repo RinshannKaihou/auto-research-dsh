@@ -4,7 +4,7 @@ export function agentIdentity(agent, hostId = 'local') {
   return { host_id: hostId, session_id: String(agent.id ?? agent.session?.header?.id) };
 }
 export function operationId(agent, suffix = randomUUID()) { return `${agent.id}:${suffix}`; }
-const managed = row => !row.detached && ['main', 'exploration'].includes(row.role);
+const managed = row => !!row && !row.detached && ['main', 'exploration'].includes(row.role);
 const terminal = state => ['finished', 'failed', 'cancelled'].includes(state);
 
 /** Domain orchestration runs exclusively on native DSH agents, goals and jobs. */
@@ -24,6 +24,7 @@ export class ResearchDomain {
     this.turns = new Map();
     this.stopping = new Set();
     this.pendingSpecialists = new Map();
+    this.specialistHandles = new Map();
     this.associatedSessions = new Set();
   }
   identity(agent) { return agentIdentity(agent, this.hostId); }
@@ -31,7 +32,7 @@ export class ResearchDomain {
     return this.storage.request(method, this.identity(agent), fields, id ?? operationId(agent));
   }
   workflow(agent, action, fields = {}, id) { return this.request(agent, 'workflow', { action, fields }, id); }
-  async state(agent) {
+  async state(agent, { all = true } = {}) {
     let state = await this.request(agent, 'control_state');
     this.associatedSessions.add(agent.id);
     const key = state.project.project_id;
@@ -41,6 +42,16 @@ export class ResearchDomain {
     }
     await this.loaded.get(key);
     state = await this.request(agent, 'control_state');
+    let cursors = state.workflow.cursors ?? {};
+    while (all && Object.keys(cursors).length) {
+      const page = await this.request(agent, 'workflow_page', { cursors });
+      const next = {};
+      for (const key of Object.keys(cursors)) {
+        state.workflow[key].push(...page[key]);
+        if (page.cursors[key]) next[key] = page.cursors[key];
+      }
+      cursors = next;
+    }
     this.associatedSessions.add(agent.id);
     return state;
   }
@@ -78,7 +89,7 @@ export class ResearchDomain {
     return goal && (goal.id === owner || goal.id === this.lastOwnedGoal.get(agent.id)) ? goal : null;
   }
   async query(agent) {
-    const state = await this.state(agent);
+    const state = await this.state(agent, { all: false });
     const sessions = state.workflow.sessions.map(row => {
       const target = this.ctx.agents.get(row.session_id);
       const goal = target ? this.ctx.goals.get(target) : null;
@@ -182,7 +193,8 @@ export class ResearchDomain {
     if (current && !owned) throw new Error('This session already has a non-plugin native goal');
     if (state.attempt?.state === 'unknown') throw new Error('旧执行尚未核实退出');
     if (!state.attempt) await this.request(agent, 'focus', { node_id: row.node_id, role: row.role === 'exploration' ? 'branch' : 'planner', mode: 'auto' }, `${id}:attempt`);
-    const task = state.workflow.tasks.find(t => t.session_id === agent.id);
+    const taskRow = state.workflow.tasks.find(t => t.session_id === agent.id);
+    const task = taskRow ? { ...taskRow, context: await this.request(agent, 'task_context', { task_id: taskRow.task_id }) } : null;
     const objective = task ? `Research task ${task.task_id}: ${task.context.question}\nPlan: ${task.context.plan}\nFixed inputs: ${JSON.stringify(task.context.inputs)}\nReport partial publications, gaps, and completion to the initiating agent.` : `Advance research project: ${state.project.goal}`;
     const instructions = '\nUse native tools in your own cwd. Use research_propose and research_dispatch for independent exploration, research_wait to wait without polling, research_publish for partial findings, and research_finish when the work segment ends. Goal completion does not imply publication, node closure, or scientific success.';
     await this.workflow(agent, 'session', { pause_reason: null }, `${id}:clear`);
@@ -240,8 +252,8 @@ export class ResearchDomain {
             if (!row.pause_reason || row.pause_reason === 'wait') await this.pauseSession(target, row.pause_reason === 'wait' ? 'project_wait' : 'project');
           } else if (['project','project_wait','cold'].includes(row.pause_reason)) {
             if (!this.quiet(target)) throw new Error('当前轮或作业尚未收尾');
-            if (row.pause_reason === 'cold' && !this.recoveryClear(target, state)) throw new Error('冷恢复发现未核实工具或作业；不会重跑命令');
             const current = await this.state(target);
+            if (row.pause_reason === 'cold' && !this.recoveryClear(target, current)) throw new Error('冷恢复发现未核实工具或作业；不会重跑命令');
             if (current.attempt?.state === 'unknown') throw new Error('旧执行待核实');
             if (row.waiting.length) await this.workflow(target, 'session', { pause_reason: 'wait' });
             else await this.arm(target, current, `${id}:${target.id}`);
@@ -255,11 +267,17 @@ export class ResearchDomain {
   }
   async resumeSession(agent, sessionId, id = operationId(agent), { retry = false } = {}) {
     return this.serial(agent, async () => {
+      const receipt = await this.request(agent, 'recovery_receipt', { key: id });
+      if (receipt) return receipt;
       const project = await this.state(agent);
-      const row = project.workflow.sessions.find(item => item.session_id === sessionId);
+      let row = project.workflow.sessions.find(item => item.session_id === sessionId);
+      if (!row) {
+        try { const selected = await this.lookup(agent, { ref: sessionId }); if (selected.kind === 'session') row = selected.value; } catch {}
+      }
       if (!managed(row)) throw new Error('目标会话不是本项目的受管理研究执行会话');
       const target = await this.adapter.resolve(sessionId);
       let current = await this.state(target);
+      if (this.ctx.goals.get(target) && !this.owned(target, current)) throw new Error('This session already has a non-plugin native goal');
       if (!this.quiet(target)) throw new Error('目标会话仍在执行或存在运行中的归属作业');
       if (!this.recoveryClear(target, current)) throw new Error('工具结果或作业退出状态尚未核实；不会重跑命令');
       const reason = current.workflow.session?.pause_reason;
@@ -270,6 +288,12 @@ export class ResearchDomain {
         throw new Error(`会话当前暂停原因是 ${reason ?? 'none'}；项目级暂停请使用 /research resume`);
       }
       const previous = current.attempt;
+      const task = current.workflow.tasks.find(t => t.session_id === target.id);
+      if (task && ['failed','unverified','finished','cancelled'].includes(task.state)) {
+        // Reserve this node before arming the native goal. The unique live-task
+        // index rejects a concurrent dispatch before any new execution begins.
+        await this.workflow(target, 'task_retry', { task_id: task.task_id }, `${id}:reserve-task`);
+      }
       if (retry && previous) {
         await this.request(target, 'finish', {
           state: 'stopped', details: {
@@ -283,9 +307,63 @@ export class ResearchDomain {
         await this.workflow(agent, 'run', { state: 'running', new_generation: true }, `${id}:run`);
       }
       this.faults.delete(target.id);
-      const goal = await this.arm(target, current, `${id}:arm`, { restart: reason === 'complete' });
+      let goal;
+      try { goal = await this.arm(target, current, `${id}:arm`, { restart: reason === 'complete' }); }
+      catch (error) {
+        await this.pauseSession(target, 'unverified');
+        if (task) await this.workflow(target, 'task_state', { task_id: task.task_id, state: 'unverified', error: error.message });
+        throw error;
+      }
       const refreshed = await this.state(target);
-      return { message: retry ? '故障退出已核实，已在原目录创建恢复工作段' : '已显式继续该研究会话', session_id: target.id, attempt_id: refreshed.attempt?.attempt_id ?? null, retry_of: previous?.attempt_id ?? null, goal_id: goal.id };
+      if (task) {
+        await this.workflow(target, 'task_resumed', { task_id: task.task_id, attempt_id: refreshed.attempt?.attempt_id, retry_of: previous?.attempt_id }, `${id}:task-running`);
+        await this.workflow(target, 'intent', { intent_id: `task-attempt:${task.task_id}`, kind: 'task-attempt', state: 'bound', details: { task_id: task.task_id, attempt_id: refreshed.attempt?.attempt_id, retry_of: previous?.attempt_id } }, `${id}:attempt-binding`);
+      }
+      const result = { message: retry ? '故障退出已核实，已在原目录创建恢复工作段' : '已显式继续该研究会话', session_id: target.id, attempt_id: refreshed.attempt?.attempt_id ?? null, retry_of: previous?.attempt_id ?? null, goal_id: goal.id };
+      await this.workflow(agent, 'intent', { intent_id: id, kind: 'recovery-receipt', state: 'complete', details: result }, `${id}:result`);
+      return result;
+    });
+  }
+  async retryTask(agent, taskId, id = operationId(agent)) {
+    return this.serial(agent, async () => {
+      const prior = await this.request(agent, 'recovery_receipt', { key: id });
+      if (prior) return prior;
+      const project = await this.state(agent);
+      const selected = await this.lookup(agent, { ref: taskId });
+      if (selected.kind !== 'exploration-task') throw new Error('不是探索任务');
+      const task = selected.value;
+      if (!['unverified','failed'].includes(task.state)) throw new Error('任务不处于待核实或故障状态');
+      if (project.workflow.run.state !== 'running') throw new Error('请先显式继续项目，再重试任务');
+      if (!this.adapter.exists) throw new Error('宿主不提供会话存在性核实');
+      // Existence errors alone never authorize replay after registered execution.
+      const clean = await this.request(agent, 'task_creation_clear', { task_id: taskId });
+      if (!clean.clear) throw new Error(`已有执行登记，请使用 /research retry --session ${task.session_id}；缺失会话不能证明退出`);
+      if (await this.adapter.exists(task.session_id)) {
+        const child = await this.adapter.resolve(task.session_id);
+        if (!this.quiet(child) || this.ctx.goals.get(child) || (child.session.events ?? []).some(e => e.type === 'tool/call' || e.type === 'agent/start')) throw new Error('创建中的原生会话已有执行事实，保留待核实');
+      }
+      await this.workflow(agent, 'task_retry', { task_id: taskId, absent_verified: true }, `${id}:requeue`);
+      await this.schedule(agent);
+      const result = { task_id: taskId, message: '已核实任务尚未开始执行；使用原任务、原会话 ID 和原目录重试创建', state: (await this.lookup(agent, { ref: taskId })).value.state };
+      await this.workflow(agent, 'intent', { intent_id: id, kind: 'recovery-receipt', state: 'complete', details: result }, `${id}:result`);
+      return result;
+    });
+  }
+  async verifySpecialist(agent, taskId, id = operationId(agent)) {
+    return this.serial(agent, async () => {
+      const task = await this.request(agent, 'specialist_get', { task_id: taskId });
+      if (task.state !== 'unverified') return task;
+      if (!task.child_session_id) throw new Error('专家身份缺失，无法证明退出；保留待核实');
+      if ([...this.pendingSpecialists.values()].some(p => p.task.task_id === taskId)) throw new Error('原生专家调用尚未返回');
+      let child;
+      try { child = await this.adapter.resolve(task.child_session_id); }
+      catch { throw new Error('无法读取专家原生会话，保留待核实'); }
+      const current = await this.state(child);
+      if (!this.quiet(child) || !this.recoveryClear(child, current)) throw new Error('专家工具或作业退出仍未核实');
+      const handle = this.specialistHandles.get(taskId);
+      if (handle) { await handle.dispose(); this.specialistHandles.delete(taskId); }
+      const parent = await this.adapter.resolve(task.parent_session_id);
+      return this.request(parent, 'specialist_finish', { fields: { task_id: taskId, state: 'incomplete', result: task.result ?? {}, error: task.error, exit_verified: true } }, `${id}:verified`);
     });
   }
   async stopProject(agent, id = operationId(agent)) {
@@ -315,6 +393,20 @@ export class ResearchDomain {
     const state = await this.state(agent);
     if (!['stopping','unverified'].includes(state.workflow.run.state)) return;
     let complete = true;
+    for (const task of state.workflow.tasks.filter(t => !terminal(t.state) && !state.workflow.sessions.some(s => s.session_id === t.session_id))) {
+      if (task.state === 'queued') {
+        await this.workflow(agent, 'task_state', { task_id: task.task_id, state: 'cancelled' });
+        continue;
+      }
+      // A failed create may have succeeded in the host before losing its receipt.
+      // Only explicit absence, with no registered execution, permits settlement.
+      try {
+        if (!verify || !this.adapter.exists || await this.adapter.exists(task.session_id)) { complete = false; continue; }
+        const clean = await this.request(agent, 'task_creation_clear', { task_id: task.task_id });
+        if (!clean.clear) { complete = false; continue; }
+        await this.workflow(agent, 'task_state', { task_id: task.task_id, state: 'cancelled' });
+      } catch { complete = false; }
+    }
     for (const row of state.workflow.sessions.filter(managed)) {
       const target = this.ctx.agents.get(row.session_id);
       if (!target || !this.quiet(target)) { complete = false; continue; }
@@ -348,7 +440,8 @@ export class ResearchDomain {
     return this.serial(agent, async () => {
       const task = await this.workflow(agent, 'task', { node_id: nodeId }, id);
       await this.schedule(agent);
-      return (await this.state(agent)).workflow.tasks.find(t => t.task_id === task.task_id);
+      // Terminal tasks leave the control view, but their retry receipts remain valid.
+      return (await this.lookup(agent, { ref: task.task_id })).value;
     });
   }
   async wait(agent, taskIds, id) {
@@ -363,7 +456,7 @@ export class ResearchDomain {
   }
   async schedule(agent) {
     let state = await this.state(agent);
-    let slots = 0;
+    let slots = state.workflow.tasks.filter(t => ['starting','unverified'].includes(t.state) && !state.workflow.sessions.some(s => s.session_id === t.session_id)).length;
     for (const row of state.workflow.sessions.filter(managed)) {
       const target = this.ctx.agents.get(row.session_id);
       if (!target) { if (!row.pause_reason) slots++; continue; }
@@ -395,7 +488,8 @@ export class ResearchDomain {
       try {
         const prepared = await this.request(parent, 'prepare_branch', { node_id: task.node_id }, `${task.task_id}:prepare`);
         const child = await this.createSession(parent, task.session_id, prepared.workspace);
-        await this.request(child, 'open', { root: state.project_root, cwd: prepared.workspace, session_role: 'exploration', node_id: task.node_id, context: task.context }, `${task.task_id}:open`);
+        const context = await this.request(parent, 'task_context', { task_id: task.task_id });
+        await this.request(child, 'open', { root: state.project_root, cwd: prepared.workspace, session_role: 'exploration', node_id: task.node_id, context }, `${task.task_id}:open`);
         await this.workflow(child, 'task_state', { task_id: task.task_id, state: 'running', cwd: prepared.workspace }, `${task.task_id}:running`);
         await this.arm(child, await this.state(child), `${task.task_id}:arm`);
         slots++;
@@ -414,7 +508,7 @@ export class ResearchDomain {
     const state = await this.state(agent);
     const task = state.workflow.tasks.find(t => t.session_id === agent.id);
     if (kind === 'finished') await this.pauseSession(agent, 'finished');
-    if (task) {
+    if (task && !terminal(task.state)) {
       await this.workflow(agent, 'notify', { key: value.publication_id ?? value.attempt_id ?? id, kind, reference: value.publication_id ? `pub/${value.publication_id}` : null, summary: value.summary ?? '', gaps: value.gaps ?? [] }, `${id}:notice`);
       if (kind === 'failed') await this.workflow(agent, 'task_state', { task_id: task.task_id, state: 'failed', error: value.summary }, `${id}:failed`);
       if (kind === 'finished') {
@@ -462,6 +556,7 @@ export class ResearchDomain {
           : 'Act as a bounded domain specialist. Answer only the fixed question from the supplied research context, preserve uncertainty and disagreements, and do not mutate the research ledger.',
       });
       if (!run.localAgent) throw new Error('The configured provider did not create a local native specialist session');
+      this.specialistHandles.set(task.task_id, run);
       const nativeResult = Promise.resolve(run.result).then(
         value => ({ ok: true, value }), error => ({ ok: false, error }),
       );
@@ -476,7 +571,7 @@ export class ResearchDomain {
         ...(native.structured === undefined ? {} : { structured: native.structured }),
         ...(native.diagnostic ? { diagnostic: native.diagnostic } : {}),
       };
-      await run.dispose(); disposed = true;
+      await run.dispose(); disposed = true; this.specialistHandles.delete(task.task_id);
       const stateName = native.stopReason === 'completed' ? 'completed'
         : native.stopReason === 'aborted' ? 'cancelled' : 'incomplete';
       return await this.request(agent, 'specialist_finish', { fields: {
@@ -486,7 +581,7 @@ export class ResearchDomain {
     } catch (error) {
       let verified = !run;
       if (run && !disposed) {
-        try { await run.dispose(); verified = true; } catch { verified = false; }
+        try { await run.dispose(); verified = true; this.specialistHandles.delete(task.task_id); } catch { verified = false; }
       }
       return this.request(agent, 'specialist_finish', { fields: {
         task_id: task.task_id,
