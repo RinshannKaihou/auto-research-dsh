@@ -1,11 +1,11 @@
-# auto-research-v5 0.6.3
+# auto-research-v5 0.6.4
 
 这是安装在正式 DSH 内的研究插件。DSH 继续负责模型请求、原生工具、会话轨迹、goal、subagent、权限与取消；插件增加研究项目、知识、材料、并行探索、节点专家和恢复工作流。Python 3.11+ 私有进程只处理 SQLite 与文件事务，不调用模型，也不运行独立研究循环。
 
 ## 安装与开始
 
 ```bash
-dsh plugin --profile web add ./auto-research-v5-0.6.3.tgz --offline
+dsh plugin --profile web add ./auto-research-v5-0.6.4.tgz --offline
 dsh web
 ```
 
@@ -16,7 +16,7 @@ dsh web
 /research auto
 ```
 
-`init` 只建立项目并关联当前原生会话，不调用模型；空白会话也会在输入区上方显示命令回执和 Research 页签提示。`auto` 创建插件拥有的原生 goal，在同一会话里由 DSH 正常续轮。项目用量只监控，没有预算或消费上限。
+`init` 只建立项目并关联当前原生会话，不调用模型。空白会话没有顶部标签栏，请点击输入区上方的“打开研究工作台”，直接在弹窗查看项目或关联已有项目；不需要先发普通消息。`init/status` 每次显示编号、时间和命令结果。已有对话的顶部 Research 标签仍可用。`auto` 或工作台“开始自主研究”才启动研究 goal 并可能产生模型费用。项目用量只监控，没有预算或消费上限。
 
 ## 命令
 

@@ -1,3 +1,3 @@
 """Durable research state for the native DSH plugin and offline migration."""
 
-__version__ = "0.6.3"
+__version__ = "0.6.4"

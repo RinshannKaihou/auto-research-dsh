@@ -127,6 +127,7 @@ export function apply(ctx, config = {}) {
           error: {
             code: 'research/unavailable',
             message: error instanceof Error ? error.message : String(error),
+            details: {},
           },
         };
       }

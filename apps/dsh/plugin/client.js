@@ -265,9 +265,10 @@ const researchStyles = `
 .ari-header{border-bottom:1px solid var(--ari-line);padding-bottom:16px;margin-bottom:16px}.ari-overline{font-size:11px;letter-spacing:.12em;color:var(--ari-accent);font-weight:600}.ari-stats,.ari-actions,.ari-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.ari-stats{gap:20px;font-size:12px;margin:14px 0}.ari-stats strong{font-size:20px;margin-right:4px;font-variant-numeric:tabular-nums}.ari-toolbar{margin-bottom:12px}.ari-toolbar input{flex:1;min-width:150px}.ari-layout{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;align-items:start}.ari-canvas{height:560px;overflow:hidden;touch-action:none;cursor:grab;background-image:radial-gradient(#85929c38 .8px,transparent .8px);background-size:20px 20px;position:relative}.ari-canvas:active{cursor:grabbing}.ari-graph-shell{min-width:0;border:1px solid var(--ari-line);border-radius:10px;overflow:hidden}.ari-graph-tools{display:flex;align-items:center;gap:8px;padding:10px;border-bottom:1px solid var(--ari-line);font-size:11px;flex-wrap:wrap}.ari-graph-tools>span:first-child{margin-right:auto}.ari-node{cursor:pointer}.ari-node rect{fill:var(--ari-paper);stroke:var(--ari-line);stroke-width:1.5}.ari-node.ari-closed rect{fill:color-mix(in srgb,var(--ari-paper) 93%,#7e8992)}.ari-node.ari-focused rect{stroke:var(--ari-accent);stroke-width:3}.ari-node.ari-selected rect{stroke:var(--ari-accent);stroke-width:3;filter:drop-shadow(0 3px 5px #0002)}.ari-node text{fill:currentColor;font-family:inherit}.ari-node-id{font-size:13px;font-weight:700}.ari-node-status,.ari-node-meta{font-size:11px}.ari-node[data-status="proposed"] .ari-node-status{fill:#b77a33}.ari-node[data-status="closed"] .ari-node-status{fill:#7e8992}.ari-node .ari-node-status{fill:var(--ari-accent)}.ari-node-question{font-size:13px;line-height:22px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;color:inherit}.ari-edge{cursor:pointer}.ari-edge path{stroke:#7c8c97;stroke-width:1.6;fill:none}.ari-edge .ari-edge-hit{stroke:transparent;stroke-width:16}.ari-edge.ari-input path:not(.ari-edge-hit){stroke-dasharray:7 5}.ari-edge.ari-anchor path:not(.ari-edge-hit){stroke:#b77a33;stroke-dasharray:2 5}.ari-edge text{font:11px sans-serif;fill:currentColor;paint-order:stroke;stroke:var(--ari-paper);stroke-width:4;stroke-linejoin:round}.ari-edge:hover path:not(.ari-edge-hit),.ari-edge:focus path:not(.ari-edge-hit){stroke:var(--ari-accent);stroke-width:3}
 .ari-details{border-left:1px solid var(--ari-line);padding-left:16px;max-height:640px;overflow:auto;overflow-wrap:anywhere}.ari-details>button:first-child{float:right;font-size:11px;margin:0 0 8px 8px}.ari-details>small{display:block;color:var(--ari-accent);margin-bottom:10px}.ari-detail-empty{color:inherit;opacity:.7;padding-top:32px}.ari-detail-section{padding:16px 0;border-bottom:1px solid var(--ari-line)}.ari-detail-section article{margin:12px 0;padding:10px;border:1px solid var(--ari-line);border-radius:6px}.ari-detail-section p,.ari-detail-section details{font-size:12px}.ari-v5 details{margin:8px 0}.ari-v5 summary{cursor:pointer;overflow-wrap:anywhere}.ari-v5 pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px}.ari-preserve{white-space:pre-wrap}.ari-relations{padding-left:18px;font-size:12px}.ari-relations li{margin:12px 0}.ari-list{list-style:none;padding:0;margin:0;max-height:600px;overflow:auto}.ari-list button{display:block;width:100%;text-align:left;margin-bottom:8px;padding:14px}.ari-list strong{color:var(--ari-accent)}.ari-list span{display:block;margin-top:6px}.ari-list small{display:block;margin-top:8px;opacity:.7}.ari-section{border:1px solid var(--ari-line);border-radius:10px;padding:14px;margin-top:16px;overflow-wrap:anywhere}.ari-section>summary{font-weight:600}.ari-empty{padding:32px;opacity:.7}.ari-canvas>.ari-empty{position:absolute;top:30px;left:0;pointer-events:none}.ari-alert{padding:12px;border:1px solid #b77a33;border-radius:6px;margin:12px 0}.ari-alert button{margin-left:12px}.ari-updated{font-size:11px;opacity:.65;margin-left:auto}.ari-sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
 .ari-receipt{--ari-accent:#328c98;--ari-line:var(--dsw-alias-border-l2,var(--border-color,#89969b55));--ari-paper:var(--dsw-alias-bg-base,var(--background-color,Canvas));display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid color-mix(in srgb,var(--ari-accent) 45%,var(--ari-line));border-radius:9px;background:color-mix(in srgb,var(--ari-paper) 92%,var(--ari-accent));font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.ari-receipt-mark{display:grid;place-items:center;width:26px;height:26px;border-radius:6px;background:var(--ari-accent);color:var(--ari-paper);font-weight:800}.ari-receipt-copy{display:grid;gap:1px;min-width:0}.ari-receipt-copy strong,.ari-receipt-copy small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.ari-receipt-entry{margin-left:auto;font-size:12px;color:var(--ari-accent);white-space:nowrap}.ari-receipt-error{border-color:#b45353;background:color-mix(in srgb,var(--ari-paper) 92%,#b45353)}.ari-receipt-error .ari-receipt-mark{background:#b45353}
+.ari-receipt{display:block;max-width:100%}.ari-receipt-row{display:flex;align-items:center;gap:10px;min-width:0}.ari-receipt-copy{flex:1}.ari-receipt-mark{flex-shrink:0}.ari-receipt button,.ari-dialog-bar button{font:inherit;border:1px solid var(--ari-accent,#328c98);background:transparent;border-radius:6px;padding:6px 10px;cursor:pointer;color:inherit}.ari-receipt button{font-size:12px}.ari-receipt :focus-visible,.ari-dialog-bar :focus-visible{outline:2px solid #328c98;outline-offset:3px}.ari-command-result{margin-top:8px;font-size:12px}.ari-command-result p{margin:0 0 5px}.ari-command-result summary{cursor:pointer}.ari-command-result pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:150px;overflow:auto;margin:6px 0 0;padding:8px;background:var(--ari-paper);border-radius:5px;font:11px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}.ari-receipt-query-error{display:block;margin-top:6px;overflow-wrap:anywhere}.ari-workbench-dialog{box-sizing:border-box;position:fixed;inset:0;width:min(1440px,96vw);height:92dvh;max-width:96vw;max-height:92dvh;margin:auto;padding:0;border:1px solid #328c9866;border-radius:12px;background:var(--dsw-alias-bg-base,Canvas);color:var(--foreground,CanvasText);box-shadow:0 20px 80px #0004}.ari-workbench-dialog[open]{display:flex;flex-direction:column}.ari-workbench-dialog::backdrop{background:#172a3466}.ari-dialog-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 18px;border-bottom:1px solid #89969b55;font:12px ui-monospace,SFMono-Regular,Menlo,monospace;flex-shrink:0}.ari-dialog-content{flex:1;min-height:0;overflow:hidden}.ari-dialog-content>.ari-v5{padding-bottom:24px}
 /* DSH 0.1.2 chat-width handles span custom conversation slots. Disable their hit area only while Research is mounted; keep the native composer above the graph. */
 [class$="_body"]:has(.ari-v5) > [class$="_widthHandle"][data-side]{pointer-events:none}
-@media(max-width:1000px){.ari-layout{grid-template-columns:minmax(0,1fr)}.ari-details{border-left:0;border-top:1px solid var(--ari-line);padding:16px 0;max-height:none}.ari-canvas{height:440px}}@media(max-width:600px){.ari-v5{padding:12px 12px 200px}.ari-canvas{height:380px}.ari-stats{gap:12px}.ari-stats strong{font-size:16px}.ari-toolbar input{width:100%}.ari-receipt-entry{display:none}}@media(prefers-reduced-motion:reduce){.ari-v5 *{transition:none!important;animation:none!important}}
+@media(max-width:1000px){.ari-layout{grid-template-columns:minmax(0,1fr)}.ari-details{border-left:0;border-top:1px solid var(--ari-line);padding:16px 0;max-height:none}.ari-canvas{height:440px}}@media(max-width:600px){.ari-v5{padding:12px 12px 200px}.ari-canvas{height:380px}.ari-stats{gap:12px}.ari-stats strong{font-size:16px}.ari-toolbar input{width:100%}.ari-receipt-row{flex-wrap:wrap}.ari-receipt-copy{flex-basis:calc(100% - 40px)}.ari-receipt-entry{display:block;margin-left:36px;white-space:normal}.ari-workbench-dialog{width:98vw;max-width:98vw;height:96dvh;max-height:96dvh}.ari-dialog-bar{padding:10px}}@media(prefers-reduced-motion:reduce){.ari-v5 *{transition:none!important;animation:none!important}}
 `;
 
 function createWorkbench(React, rpc, openSession, projectGraph, ResearchGraph, components, researchStyles) {
@@ -404,21 +405,73 @@ function createWorkbench(React, rpc, openSession, projectGraph, ResearchGraph, c
   };
 }
 
-function createResearchReceipt(React) {
+// Session-scoped command receipts. This layer only queries status; it never
+// sends a prompt, starts a goal, or changes the host's blank-session state.
+function createReceiptState(rpc, now=()=>new Date().toLocaleTimeString()) {
+  const values=new Map(),listeners=new Map(),requests=new Map();
+  const publish=(id,value)=>{values.set(id,value);for(const listener of listeners.get(id)??[])listener();};
+  const store=id=>({
+    getSnapshot:()=>values.get(id)??null,
+    subscribe:listener=>{const set=listeners.get(id)??new Set();set.add(listener);listeners.set(id,set);return()=>{set.delete(listener);if(!set.size)listeners.delete(id);};},
+  });
+  async function refresh(id) {
+    const seq=(requests.get(id)??0)+1;requests.set(id,seq);
+    try {
+      const response=await rpc('status',{sessionId:id});
+      if(!response.ok)throw new Error(response.error?.message??'无法读取研究状态');
+      if(requests.get(id)!==seq)return;
+      const {command,commandSequence,commandTime}=values.get(id)??{};
+      publish(id,{...response.value,associated:true,command,commandSequence,commandTime});
+    } catch(error) {
+      if(requests.get(id)!==seq)return;
+      const {command,commandSequence,commandTime}=values.get(id)??{};
+      // Do not leave an old project's success badge after detach or RPC errors.
+      publish(id,{associated:false,refreshError:error.message,command,commandSequence,commandTime});
+    }
+  }
+  function executed(id,name,result) {
+    if(name!=='research')return;
+    const previous=values.get(id)??{};
+    publish(id,{...previous,command:result,commandSequence:(previous.commandSequence??0)+1,commandTime:now()});
+    void refresh(id);
+  }
+  return {store,refresh,executed};
+}
+
+function createResearchReceipt(React, Workbench, researchStyles) {
   const h=React.createElement;
+  function ResearchDialog({sessionId,onClose}) {
+    const dialog=React.useRef(null);
+    React.useEffect(()=>{
+      const element=dialog.current;element.showModal();
+      return()=>element.close();
+    },[]);
+    return h('dialog',{ref:dialog,className:'ari-workbench-dialog','aria-label':'Research 研究工作台',onClose},
+      h('div',{className:'ari-dialog-bar'},h('strong',null,'Research / 研究工作台'),
+        h('button',{type:'button',onClick:()=>dialog.current.close(),'aria-label':'关闭研究工作台'},'关闭 · Esc')),
+      h('div',{className:'ari-dialog-content'},h(Workbench,{sessionId,key:sessionId})));
+  }
   return function ResearchReceipt({sessionId,useReceipt,refresh}) {
     // DSH's public slot renderer binds Observable faces declared under
     // `hooks.receipt` to a conventional `useReceipt` component prop.
     const snapshot=useReceipt(value=>value);
+    const [opened,setOpened]=React.useState(false);
     React.useEffect(()=>{void refresh(sessionId);},[sessionId,refresh]);
-    if(!snapshot?.associated&&!snapshot?.command)return null;
-    const failed=snapshot.command?.kind==='error';
-    return h('aside',{className:`ari-receipt ${failed?'ari-receipt-error':''}`,role:failed?'alert':'status','aria-live':'polite'},
-      h('style',null,researchStyles),h('span',{className:'ari-receipt-mark','aria-hidden':'true'},failed?'!':'R'),
-      h('span',{className:'ari-receipt-copy'},
-        h('strong',null,failed?'Research 命令未完成':snapshot.project?.goal??'Research 已关联'),
-        h('small',null,failed?(snapshot.command?.text??'请查看命令结果'):`${snapshot.project?.control??'manual'} · schema ${snapshot.schema_version??'?'}`)),
-      h('span',{className:'ari-receipt-entry'},'打开上方 Research 标签 →'));
+    const failed=snapshot?.command?.kind==='error';
+    const associated=snapshot?.associated;
+    return h(React.Fragment,null,
+      h('style',null,researchStyles),
+      h('aside',{className:`ari-receipt ${failed?'ari-receipt-error':''}`},
+        h('div',{className:'ari-receipt-row'},h('span',{className:'ari-receipt-mark','aria-hidden':'true'},failed?'!':'R'),
+          h('span',{className:'ari-receipt-copy'},
+            h('strong',null,associated?snapshot.project?.goal??'Research 已关联':'Research / 研究项目'),
+            h('small',null,associated?`${snapshot.project?.control??'manual'} · schema ${snapshot.schema_version??'?'}`:'初始化与关联无需发送消息或调用模型')),
+          h('button',{type:'button',className:'ari-receipt-entry','aria-haspopup':'dialog',onClick:()=>setOpened(true)},'打开研究工作台')),
+        snapshot?.command&&h('div',{key:snapshot.commandSequence,className:'ari-command-result'},
+          h('p',{role:failed?'alert':'status','aria-live':'polite'},`Research 命令${failed?'失败':'已完成'} · 第 ${snapshot.commandSequence} 次 · ${snapshot.commandTime}`),
+          h('details',{open:true},h('summary',null,failed?'错误详情':'命令结果'),h('pre',null,snapshot.command.text??'命令没有返回文本'))),
+        snapshot?.refreshError&&h('small',{className:'ari-receipt-query-error'},`状态查询：${snapshot.refreshError}`)),
+      opened&&h(ResearchDialog,{sessionId,onClose:()=>{setOpened(false);void refresh(sessionId);}}));
   };
 }
 
@@ -426,12 +479,9 @@ return {inject:['slots','connection','sessions'],apply(ctx){
 const rpc=(endpoint,payload)=>ctx.connection.rpc.call('/research-v5',endpoint,payload);
 const Graph=createResearchGraph(React,layoutGraph,inViewport,clampZoom);
 const Workbench=createWorkbench(React,rpc,id=>ctx.sessions.open(id),projectGraph,Graph,createResearchDetails(React),researchStyles);
-const Receipt=createResearchReceipt(React),receiptValues=new Map(),receiptListeners=new Map();
-const receiptStore=sessionId=>({getSnapshot:()=>receiptValues.get(sessionId)??null,subscribe:listener=>{const set=receiptListeners.get(sessionId)??new Set();set.add(listener);receiptListeners.set(sessionId,set);return()=>set.delete(listener);}});
-const publishReceipt=(sessionId,value)=>{receiptValues.set(sessionId,value);for(const listener of receiptListeners.get(sessionId)??[])listener();};
-const refreshReceipt=async sessionId=>{try{const response=await rpc('status',{sessionId});if(response.ok)publishReceipt(sessionId,{...(receiptValues.get(sessionId)??{}),associated:true,...response.value});}catch{}};
-ctx.on('command/executed',(sessionId,commandName,result)=>{if(commandName!=='research')return;publishReceipt(sessionId,{...(receiptValues.get(sessionId)??{}),command:result});void refreshReceipt(sessionId);});
-ctx.slots.inject('conversation.input.dock',()=>ctx.slots.register({name:'conversation.input.dock',id:'research-receipt',order:20,inject:sessionId=>({sessionId,hooks:{receipt:receiptStore(sessionId)},refresh:refreshReceipt})},Receipt));
+const Receipt=createResearchReceipt(React,Workbench,researchStyles),receipts=createReceiptState(rpc);
+ctx.on('command/executed',receipts.executed);
+ctx.slots.inject('conversation.input.dock',()=>ctx.slots.register({name:'conversation.input.dock',id:'research-receipt',order:20,inject:sessionId=>({sessionId,hooks:{receipt:receipts.store(sessionId)},refresh:receipts.refresh})},props=>React.createElement(Receipt,{...props,key:props.sessionId})));
 ctx.slots.inject('conversation.view',()=>ctx.slots.register({name:'conversation.view',id:'research-v5',order:51,label:'Research'},props=>React.createElement(Workbench,{...props,key:props.sessionId})));
 }};
 }});
