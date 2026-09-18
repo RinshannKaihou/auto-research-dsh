@@ -453,7 +453,7 @@ class QueryStore:
                 )
             ]
             return {
-                "schema_version": 5,
+                "schema_version": 6,
                 "project": project,
                 "association": dict(association) if association else None,
                 "attempt": {**dict(attempt), "details": json.loads(attempt["details"])}

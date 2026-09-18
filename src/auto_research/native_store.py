@@ -1,4 +1,4 @@
-"""Schema-5 domain store for the native DSH research plugin.
+"""Schema-6 domain store for the native DSH research plugin.
 
 DSH owns model execution, tools, sessions, and transcripts.  This module only
 owns research metadata, immutable publications, observations, and idempotency.
@@ -20,9 +20,10 @@ from .errors import ConflictError, NotFoundError, ValidationError
 from .memory_store import MemoryStore, migrate_schema4, parse_knowledge_ref
 from .query_store import QueryStore
 from .schema5 import SCHEMA5_DDL, ensure_schema5_columns, migrate_schema5
+from .schema6 import migrate_schema6
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 ATTEMPT_STATES = frozenset({"open", "finished", "stopped", "unknown"})
 NODE_STATES = frozenset({"proposed", "open", "closed"})
 
@@ -71,7 +72,7 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
         if readonly:
             with self._connection() as db:
                 if db.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
-                    raise ValidationError("Read-only view requires schema 5")
+                    raise ValidationError("Read-only view requires schema 6")
             return
         self.meta.mkdir(parents=True, exist_ok=True)
         if self.db_path.exists():
@@ -86,6 +87,9 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
             if version == 4:
                 migrate_schema5(self.db_path)
                 version = 5
+            if version == 5:
+                migrate_schema6(self.db_path)
+                version = 6
             if version not in {0, SCHEMA_VERSION}:
                 raise ValidationError(
                     f"Schema {version} must be migrated before native plugin writes"
@@ -219,7 +223,7 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
             CREATE TABLE IF NOT EXISTS counters (
                 name TEXT PRIMARY KEY, value INTEGER NOT NULL
             );
-            PRAGMA user_version=5;
+            PRAGMA user_version=6;
             """
         )
         db.executescript(DDL)
@@ -245,7 +249,7 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
         for statement in SCHEMA5_DDL.split(";"):
             if statement.strip():
                 db.execute(statement)
-        db.execute("PRAGMA user_version=5")
+        db.execute("PRAGMA user_version=6")
 
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:

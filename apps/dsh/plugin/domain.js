@@ -1,4 +1,7 @@
 import { randomUUID, createHash } from 'node:crypto';
+import { mkdir, writeFile, unlink } from 'node:fs/promises';
+import { join } from 'node:path';
+import { roleInstructions } from './roles.js';
 
 export function agentIdentity(agent, hostId = 'local') {
   return { host_id: hostId, session_id: String(agent.id ?? agent.session?.header?.id) };
@@ -16,6 +19,9 @@ export class ResearchDomain {
     this.memoryReadTimeoutMs = config.memoryReadTimeoutMs ?? 2000;
     this.autonomousConcurrency = config.autonomousConcurrency ?? 2;
     this.specialistFanout = config.specialistFanout ?? 2;
+    this.specialistTimeoutMs = config.specialistTimeoutMs ?? 600000;
+    this.specialistStarts = new Map();
+    this.runningSpecialists = new Map();
     this.subagentProvider = config.subagentProvider ?? 'spawn';
     this.loaded = new Map();
     this.locks = new Map();
@@ -27,6 +33,7 @@ export class ResearchDomain {
     this.specialistHandles = new Map();
     this.associatedSessions = new Set();
     this.sessionRoles = new Map();
+    this.specialistModes = new Map();
   }
   identity(agent) { return agentIdentity(agent, this.hostId); }
   request(agent, method, fields = {}, id) {
@@ -163,6 +170,8 @@ export class ResearchDomain {
       }, `${pending.operationId}:bind`);
     }
     await pending.bound;
+    this.sessionRoles.set(agent.id, 'specialist');
+    this.specialistModes.set(agent.id, pending.task.context_mode);
     return pending.task;
   }
   async open(agent, { goal, root } = {}, id = operationId(agent)) {
@@ -204,7 +213,7 @@ export class ResearchDomain {
     const taskRow = state.workflow.tasks.find(t => t.session_id === agent.id);
     const task = taskRow ? { ...taskRow, context: await this.request(agent, 'task_context', { task_id: taskRow.task_id }) } : null;
     const objective = task ? `Research task ${task.task_id}: ${task.context.question}\nPlan: ${task.context.plan}\nFixed inputs: ${JSON.stringify(task.context.inputs)}\nReport partial publications, gaps, and completion to the initiating agent.` : `Advance research project: ${state.project.goal}`;
-    const instructions = '\nUse native tools in your own cwd. Use research_propose and research_dispatch for independent exploration, research_wait to wait without polling, research_publish for partial findings, and research_finish when the work segment ends. Goal completion does not imply publication, node closure, or scientific success.';
+    const instructions = '\n' + roleInstructions(row.role);
     await this.workflow(agent, 'session', { pause_reason: null }, `${id}:clear`);
     let goal;
     if (restart && current && current.phase !== 'complete') this.ctx.goals.clear(agent, { id: current.id, revision: current.revision });
@@ -366,18 +375,22 @@ export class ResearchDomain {
   async verifySpecialist(agent, taskId, id = operationId(agent)) {
     return this.serial(agent, async () => {
       const task = await this.request(agent, 'specialist_get', { task_id: taskId });
-      if (task.state !== 'unverified') return task;
-      if (!task.child_session_id) throw new Error('专家身份缺失，无法证明退出；保留待核实');
-      if ([...this.pendingSpecialists.values()].some(p => p.task.task_id === taskId)) throw new Error('原生专家调用尚未返回');
-      let child;
-      try { child = await this.adapter.resolve(task.child_session_id); }
-      catch { throw new Error('无法读取专家原生会话，保留待核实'); }
+      const state = await this.state(agent);
+      if (agent.id !== task.parent_session_id && state.workflow.session?.role !== 'main') throw new Error('Only the parent or main coordinator may verify this specialist');
+      if (task.exit_verified && ['completed', 'incomplete', 'cancelled'].includes(task.state)) return task;
+      if (this.runningSpecialists.has(taskId)) return { ...task, recovery: 'Native specialist call is still active' };
+      if (!task.child_session_id) return { ...task, recovery: 'No native identity is available to verify; do not edit the database' };
+      const child = await this.adapter.resolve(task.child_session_id);
       const current = await this.state(child);
-      if (!this.quiet(child) || !this.recoveryClear(child, current)) throw new Error('专家工具或作业退出仍未核实');
+      if (!this.quiet(child) || !this.recoveryClear(child, current)) return { ...task, recovery: 'Native tools or jobs are still active or unverified' };
       const handle = this.specialistHandles.get(taskId);
       if (handle) { await handle.dispose(); this.specialistHandles.delete(taskId); }
       const parent = await this.adapter.resolve(task.parent_session_id);
-      return this.request(parent, 'specialist_finish', { fields: { task_id: taskId, state: 'incomplete', result: task.result ?? {}, error: task.error, exit_verified: true } }, `${id}:verified`);
+      // Preserve legacy inline results in storage; never resend their body.
+      return this.request(parent, 'specialist_finish', { fields: {
+        task_id: taskId, state: task.state === 'cancelled' ? 'cancelled' : 'incomplete', preserve_result: true,
+        error: 'Exit verified by recovery; original scientific deliverable was not re-executed', exit_verified: true,
+      } }, `${id}:verified`);
     });
   }
   async stopProject(agent, id = operationId(agent)) {
@@ -603,79 +616,118 @@ export class ResearchDomain {
     }
     await this.serial(agent, () => this.schedule(agent));
   }
-  async delegate(agent, args, exec, id, purpose = 'domain') {
-    if (!this.ctx.subagents?.start) throw new Error('Native DSH subagent service is unavailable');
+  specialistTools(args) {
+    const allowed = args.context_mode === 'blind' ? ['research_read_input'] : ['read', 'research_query', 'research_read_input'];
+    const requested = args.tool_scope?.length ? args.tool_scope : allowed;
+    if (requested.some(name => !allowed.includes(name))) throw new Error('Specialist tool_scope may only narrow read-only tools; blind reviewers use research_read_input only');
+    return { allow: [...new Set(requested)] };
+  }
+  async createSpecialist(agent, args, id, purpose = 'domain') {
     const state = await this.state(agent), row = state.workflow.session;
-    if (!managed(row)) throw new Error('Only managed research agents may delegate specialists');
-    if (agent.session.header.parentSession) throw new Error('Specialists cannot recursively delegate');
-    let task = await this.request(agent, 'specialist_create', { fields: {
-      purpose, label: args.label ?? (purpose === 'review' ? '整理与复核' : '节点专家'),
-      prompt: args.prompt, inputs: args.inputs ?? [], node_id: args.node_id ?? state.attempt?.node_id ?? row.node_id,
-      fanout_limit: this.specialistFanout,
+    if (!managed(row) || agent.session.header.parentSession) throw new Error('Only main/node_core may delegate specialists');
+    this.specialistTools(args);
+    const created = await this.request(agent, 'specialist_create', { fields: {
+      purpose, label: args.label ?? 'Research specialist', prompt: args.prompt,
+      inputs: args.inputs ?? [], node_id: args.node_id ?? row.node_id,
+      context_mode: args.context_mode ?? 'research', fanout_limit: this.specialistFanout,
     }, model_call: true }, id);
-    task = await this.request(agent, 'specialist_get', { task_id: task.task_id });
-    if (['completed', 'incomplete', 'cancelled'].includes(task.state) && task.exit_verified) {
-      return task;
-    }
-    if (['running', 'unverified'].includes(task.state)) return task;
-    const pending = { task, operationId: id, bound: null, childSessionId: null };
-    this.pendingSpecialists.set(agent.id, pending);
-    let run, result, disposed = false;
+    return this.request(agent, 'specialist_get', { task_id: created.task_id });
+  }
+  async delegateBatch(agent, args, exec, id) {
+    if (!Array.isArray(args.tasks) || !args.tasks.length || args.tasks.length > this.specialistFanout) throw new Error(`A batch must contain 1 to ${this.specialistFanout} specialists; no background queue is created`);
+    args.tasks.forEach(task => this.specialistTools(task));
+    // Reserve the entire batch before starting any native child.
+    const tasks = await this.serial(agent, async () => {
+      const reserved = [];
+      try {
+        for (const [i, task] of args.tasks.entries()) reserved.push(await this.createSpecialist(agent, task, `${id}:${i}`));
+        return reserved;
+      } catch (error) {
+        for (const task of reserved) if (task.state === 'starting' && !task.child_session_id) await this.request(agent, 'specialist_finish', { fields: {task_id: task.task_id, state: 'cancelled', result: {}, error: 'Batch reservation failed before native startup', exit_verified: true} }, `${id}:${task.task_id}:reservation-cancel`);
+        throw error;
+      }
+    });
+    const results = await Promise.allSettled(tasks.map((task, i) => this.runSpecialist(agent, args.tasks[i], exec, `${id}:${i}`, task)));
+    return { tasks: results.map((result, i) => result.status === 'fulfilled' ? result.value : { task_id: tasks[i].task_id, recovery_required: true, error: String(result.reason?.message ?? result.reason).slice(0, 2000), next_action: 'research_verify_specialist' }) };
+  }
+  async delegate(agent, args, exec, id, purpose = 'domain') {
+    const task = await this.createSpecialist(agent, args, id, purpose);
+    return this.runSpecialist(agent, args, exec, id, task);
+  }
+  async archiveSpecialistResult(agent, task, native, id) {
+    const state = await this.state(agent);
+    const directory = join(state.project_root, '.research', 'specialist-results');
+    await mkdir(directory, { recursive: true });
+    const path = join(directory, `${task.task_id}.json`);
+    const output = (native.output ?? []).filter(block => block.type === 'text').map(block => ({ type: 'text', text: block.text }));
+    const result = { stop_reason: native.stopReason, output, ...(native.structured === undefined ? {} : { structured: native.structured }), ...(native.diagnostic ? { diagnostic: native.diagnostic } : {}) };
+    await writeFile(path, JSON.stringify(result), { mode: 0o600 });
     try {
-      const toolFilter = Array.isArray(args.tool_scope) && args.tool_scope.length
-        ? { allow: [...new Set([...args.tool_scope, 'research_query'])] }
-        : { deny: [
-          'research_dispatch', 'research_wait', 'research_propose', 'research_note',
-          'research_memory', 'research_snapshot', 'research_publish', 'research_relate',
-          'research_finish', 'research_close_node', 'research_delegate',
-        ] };
-      run = await this.ctx.subagents.start(this.subagentProvider, {
-        label: task.label,
-        prompt: [{ type: 'text', text: task.prompt }],
-        parent: agent,
-        signal: exec.signal,
-        maxDepth: 1,
-        toolFilter,
-        persona: purpose === 'review'
-          ? 'Act as an independent research consolidation reviewer. Read the fixed research context and return conflicts, applicable conditions, early negative results, and proposed revisions with sources. Do not mutate the research ledger.'
-          : 'Act as a bounded domain specialist. Answer only the fixed question from the supplied research context, preserve uncertainty and disagreements, and do not mutate the research ledger.',
-      });
-      if (!run.localAgent) throw new Error('The configured provider did not create a local native specialist session');
-      this.specialistHandles.set(task.task_id, run);
-      const nativeResult = Promise.resolve(run.result).then(
-        value => ({ ok: true, value }), error => ({ ok: false, error }),
-      );
-      pending.childSessionId = run.localAgent.id;
-      await this.ensureSpecialist(run.localAgent);
-      const settled = await nativeResult;
-      if (!settled.ok) throw settled.error;
-      const native = settled.value;
-      result = {
-        stop_reason: native.stopReason,
-        output: native.output ?? [],
-        ...(native.structured === undefined ? {} : { structured: native.structured }),
-        ...(native.diagnostic ? { diagnostic: native.diagnostic } : {}),
-      };
+      const artifact = await this.request(agent, 'specialist_result_import', { task_id: task.task_id }, `${id}:result`);
+      return { stop_reason: native.stopReason, artifact, preview: output.map(b => b.text).join('\n').slice(0, 1600) };
+    } finally { await unlink(path).catch(() => {}); }
+  }
+  async runSpecialist(agent, args, exec, id, task) {
+    if (!this.ctx.subagents?.start) throw new Error('Native DSH subagent service is unavailable');
+    if (task.exit_verified || ['running', 'unverified'].includes(task.state)) return task;
+    if (this.runningSpecialists.has(task.task_id)) return { ...task, state: 'running' };
+    const pending = { task, operationId: id, bound: null, childSessionId: null };
+    const controller = new AbortController();
+    const signal = AbortSignal.any([exec.signal, controller.signal]);
+    let timer, run, settled, result = {}, disposed = false, timedOut = false;
+    this.runningSpecialists.set(task.task_id, pending);
+    // Only the short creation/binding window is serialized. Result waits overlap.
+    const previous = this.specialistStarts.get(agent.id) ?? Promise.resolve();
+    const starting = previous.catch(() => {}).then(async () => {
+      if (signal.aborted) throw new Error('Specialist cancelled before startup');
+      this.pendingSpecialists.set(agent.id, pending);
+      timer = setTimeout(() => { timedOut = true; controller.abort(); }, this.specialistTimeoutMs);
+      try {
+        run = await this.ctx.subagents.start(task.context_mode === 'blind' ? 'spawn' : this.subagentProvider, {
+          label: task.context_mode === 'blind' ? 'Blind reviewer' : task.label,
+          prompt: [{ type: 'text', text: task.prompt }], parent: agent, signal,
+          maxDepth: 1, toolFilter: this.specialistTools({ ...args, context_mode: task.context_mode }),
+          persona: roleInstructions('specialist'),
+        });
+        // Observe rejection immediately, before awaiting registration.
+        settled = Promise.resolve(run.result).then(value => ({ok: true, value}), error => ({ok: false, error}));
+        if (!run.localAgent) throw new Error('Provider must create a local native specialist session');
+        this.specialistHandles.set(task.task_id, run);
+        pending.childSessionId = run.localAgent.id;
+        await this.ensureSpecialist(run.localAgent);
+      } finally { this.pendingSpecialists.delete(agent.id); }
+    });
+    this.specialistStarts.set(agent.id, starting);
+    try {
+      await starting;
+      const native = await settled;
+      if (!native.ok) throw native.error;
+      // Release native resources independently of archival/storage success.
       await run.dispose(); disposed = true; this.specialistHandles.delete(task.task_id);
-      const stateName = native.stopReason === 'completed' ? 'completed'
-        : native.stopReason === 'aborted' ? 'cancelled' : 'incomplete';
+      result = await this.archiveSpecialistResult(agent, task, native.value, id);
       return await this.request(agent, 'specialist_finish', { fields: {
-        task_id: task.task_id, state: stateName, result,
-        error: native.diagnostic ?? null, exit_verified: true,
+        task_id: task.task_id, state: native.value.stopReason === 'completed' ? 'completed' : native.value.stopReason === 'aborted' ? 'cancelled' : 'incomplete',
+        result, exit_verified: true, error: timedOut ? 'Specialist time budget reached; partial output archived' : native.value.diagnostic?.slice(0, 2000) ?? null,
       } }, `${id}:finish`);
     } catch (error) {
-      let verified = !run;
+      let verified = disposed || !run;
       if (run && !disposed) {
         try { await run.dispose(); verified = true; this.specialistHandles.delete(task.task_id); } catch { verified = false; }
       }
-      return this.request(agent, 'specialist_finish', { fields: {
-        task_id: task.task_id,
-        state: verified ? (exec.signal.aborted ? 'cancelled' : 'incomplete') : 'unverified',
-        result: result ?? {}, error: error instanceof Error ? error.message : String(error),
-        exit_verified: verified,
-      } }, `${id}:finish-error`);
+      // Never retransmit the original output in the error path.
+      try {
+        return await this.request(agent, 'specialist_finish', { fields: {
+          task_id: task.task_id, state: verified ? (signal.aborted ? 'cancelled' : 'incomplete') : 'unverified',
+          result: result.artifact ? result : { native_session_id: pending.childSessionId },
+          error: `${String(error?.message ?? error).slice(0, 1800)}; use research_verify_specialist if recovery is needed`, exit_verified: verified,
+        } }, `${id}:finish-error`);
+      } catch (storageError) {
+        return { task_id: task.task_id, child_session_id: pending.childSessionId, state: 'unverified', exit_verified: verified,
+          persisted: false, recovery_required: true, result, error: String(storageError?.message ?? storageError).slice(0, 1800), next_action: 'research_verify_specialist' };
+      }
     } finally {
-      this.pendingSpecialists.delete(agent.id);
+      clearTimeout(timer); this.runningSpecialists.delete(task.task_id);
+      if (this.specialistStarts.get(agent.id) === starting) this.specialistStarts.delete(agent.id);
     }
   }
   async idle(agent) {

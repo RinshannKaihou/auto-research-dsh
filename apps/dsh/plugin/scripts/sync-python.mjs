@@ -17,6 +17,7 @@ for (const file of [
   'native_store.py',
   'query_store.py',
   'schema5.py',
+  'schema6.py',
   'workflow_store.py',
   'service.py',
 ]) {

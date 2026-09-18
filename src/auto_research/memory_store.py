@@ -69,7 +69,8 @@ CREATE TABLE IF NOT EXISTS specialist_tasks (
  node_id TEXT, attempt_id TEXT, purpose TEXT NOT NULL, label TEXT NOT NULL,
  prompt TEXT NOT NULL, inputs TEXT NOT NULL, state TEXT NOT NULL,
  result TEXT, error TEXT, exit_verified INTEGER NOT NULL DEFAULT 0,
- created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+ context_mode TEXT NOT NULL DEFAULT 'research'
 );
 CREATE TABLE IF NOT EXISTS specialist_bindings (
  session_id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES specialist_tasks(task_id),
@@ -722,6 +723,9 @@ class MemoryStore:
                 "WHERE b.session_id=? ORDER BY t.created_at DESC LIMIT 1",
                 (session_id,),
             ).fetchone()
+            if specialist and specialist["context_mode"] == "blind":
+                body = _encoded({"role": "blind reviewer", "instructions": "Evaluate only the assigned frozen inputs. Use research_read_input; do not infer hidden labels or seek project background.", "inputs": [{"input_id": f"input-{i + 1}"} for i, _ in enumerate(json.loads(specialist["inputs"]))]})
+                return {"context_mode": "blind", "text": body, "source_digest": hashlib.sha256(body.encode()).hexdigest(), "source_sequence": db.execute("SELECT COALESCE(MAX(event_id),0) FROM events").fetchone()[0], "dependencies": [f"specialist/{specialist['task_id']}"], "omitted": []}
             node_id = attempt["node_id"] if attempt else session["node_id"] if session else None
             node_row = (
                 db.execute(
@@ -908,6 +912,12 @@ class MemoryStore:
                         frozen_context["goal"] = frozen_context["goal"][:1000]
             blocks = [
                 ("project", {"goal": project["goal"], "control": project["control"]}),
+                ("role_instructions", {
+                    "main": "Coordinate inventory, planning, dispatch, synthesis and continuation. Propose then dispatch node work; full coding and experiments belong to node_core. Do not use research_finish. In manual mode prepare the plan; /research auto enables node execution. If the user requests plan confirmation, submit the complete plan and wait; clarification answers alone do not approve it. Record acceptance criteria in plans/checkpoints and report evidence, gaps and stopping reasons. Already authorized execution needs no extra confirmation.",
+                    "node_core": "Own this node's planning, coding, experiments and analysis. Delegate bounded read-only specialists, publish node findings and use research_finish to end the work segment.",
+                    "specialist": "Read only the assigned question and materials; return evidence and uncertainty. Do not change research records or delegate.",
+                }.get(session["role"] if session else "", "Follow the assigned research role.")),
+                ("control_instructions", "Use research tools to change the ledger. Never edit .research or issue SQL repairs. For stuck specialists use research_verify_specialist. Publication complete means a completed deliverable, not scientific success; pending reviews are not approval gates."),
                 (
                     "identity",
                     {
@@ -976,6 +986,8 @@ class MemoryStore:
                         "identity": 400,
                         "task": 2200,
                         "specialist_task": 1400,
+                        "role_instructions": 1600,
+                        "control_instructions": 800,
                         "attempt": 400,
                         "pending_review": 2200,
                         "knowledge": 4000,
@@ -1088,6 +1100,7 @@ class MemoryStore:
                 )
             return {
                 "text": body,
+                "context_mode": specialist["context_mode"] if specialist else None,
                 "source_digest": digest,
                 "dependencies": sorted(set(dependencies)),
                 "truncated": bool(omitted),
@@ -1208,9 +1221,12 @@ class MemoryStore:
             "prompt": _require_text(fields.get("prompt"), "prompt"),
             "inputs": _json_value(fields.get("inputs"), "inputs", []),
             "fanout_limit": int(fields.get("fanout_limit", 2)),
+            "context_mode": fields.get("context_mode", "research"),
         }
 
         def work(db: sqlite3.Connection) -> dict:
+            if payload["context_mode"] not in {"research", "blind"}:
+                raise ValidationError("context_mode must be research or blind")
             if payload["purpose"] not in {"review", "domain"}:
                 raise ValidationError("Specialist purpose must be review or domain")
             if (
@@ -1243,7 +1259,7 @@ class MemoryStore:
             task_id = "S-" + hashlib.sha256(request_id.encode()).hexdigest()[:20]
             at = _now()
             db.execute(
-                "INSERT INTO specialist_tasks VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO specialist_tasks VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     task_id,
                     request_id,
@@ -1261,6 +1277,7 @@ class MemoryStore:
                     0,
                     at,
                     at,
+                    payload["context_mode"],
                 ),
             )
             return self._decode_specialist(
@@ -1339,6 +1356,7 @@ class MemoryStore:
             "result": _json_value(fields.get("result"), "result", {}),
             "error": fields.get("error"),
             "exit_verified": bool(fields.get("exit_verified")),
+            "preserve_result": bool(fields.get("preserve_result")),
         }
         if payload["state"] not in {"completed", "incomplete", "cancelled", "unverified"}:
             raise ValidationError("Invalid specialist terminal state")
@@ -1359,7 +1377,7 @@ class MemoryStore:
                 "UPDATE specialist_tasks SET state=?,result=?,error=?,exit_verified=?,updated_at=? WHERE task_id=?",
                 (
                     payload["state"],
-                    _encoded(payload["result"]),
+                    task["result"] if payload["preserve_result"] else _encoded(payload["result"]),
                     payload["error"],
                     int(payload["exit_verified"]),
                     at,

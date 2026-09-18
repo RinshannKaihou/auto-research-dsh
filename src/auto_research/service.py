@@ -555,7 +555,7 @@ class NativeService:
         method = request.get("method")
         if method == "capabilities":
             value = {
-                "schema_version": 5,
+                "schema_version": 6,
                 "execution_owner": "dsh",
                 "model_loop": "native-goals",
                 "manual_research": True,
@@ -640,6 +640,10 @@ class NativeService:
                     "SELECT * FROM workflow_sessions WHERE session_id=?", (session_id,)
                 ).fetchone()
                 role = dict(row) if row else None
+            with store._connection() as db:
+                specialist_row = db.execute("SELECT t.* FROM specialist_tasks t JOIN specialist_bindings b USING(task_id) WHERE b.session_id=?", (session_id,)).fetchone()
+            if specialist_row and specialist_row["context_mode"] == "blind" and method in {"query", "status", "history_page", "guidance_status"}:
+                raise ValueError("Blind reviewers may only read assigned inputs through research_read_input")
             writes = {
                 "focus",
                 "propose",
@@ -663,7 +667,7 @@ class NativeService:
                 )
             if method == "guidance_register" and (not role or role["role"] != "main"):
                 raise ValueError("Only the research main session may configure method guidance")
-            if request.get("model_call") and method not in writes | {"query", "status"}:
+            if request.get("model_call") and method not in writes | {"query", "status", "specialist_read_input"}:
                 raise ValueError("This operation requires the host controller")
             if request.get("model_call") and method in {"note", "publish", "snapshot"}:
                 with store._connection() as db:
@@ -911,7 +915,23 @@ class NativeService:
                         "SELECT * FROM attempts WHERE association_id=? AND ended_at IS NULL",
                         (association["association_id"],),
                     ).fetchone()
-                fields = request.get("fields", {})
+                fields = dict(request.get("fields", {}))
+                node_id = role["node_id"]
+                if role["role"] == "main":
+                    if fields.get("purpose") != "review" or fields.get("node_id") is not None:
+                        raise ValueError("Main coordinates nodes; use research_dispatch. Only project consolidation reviewers may be delegated by main.")
+                elif not node_id or not attempt or attempt["node_id"] != node_id:
+                    raise ValueError("A specialist requires a live node_core attempt")
+                if fields.get("node_id") not in {None, node_id}:
+                    raise ValueError("Specialist node_id must match the caller's node")
+                fields["node_id"] = node_id
+                if fields.get("context_mode", "research") == "blind":
+                    if not fields.get("inputs"):
+                        raise ValueError("Blind review requires frozen file publication-item inputs")
+                    for ref in fields["inputs"]:
+                        selected = store.reference_query(ref, full=True)
+                        if selected["kind"] != "publication-item" or selected["value"].get("object_kind") != "file" or not selected["value"].get("object_version"):
+                            raise ValueError("Blind inputs must be frozen file publication-item references")
                 value = store.specialist_create(
                     {
                         **fields,
@@ -922,6 +942,31 @@ class NativeService:
                     },
                     self._operation(request),
                 )
+            elif method == "specialist_result_import":
+                task = store.specialist_get(request.get("task_id"))
+                if task["parent_session_id"] != session_id:
+                    raise ValueError("Only the parent may import a specialist result")
+                directory = root / ".research" / "specialist-results"
+                source = directory / (task["task_id"] + ".json")
+                value = ArtifactStore(root).freeze(source, directory)
+            elif method == "specialist_read_input":
+                if not specialist_row:
+                    raise ValueError("Only an assigned specialist may read inputs")
+                refs = json.loads(specialist_row["inputs"])
+                input_id = request.get("input_id", "")
+                allowed = {f"input-{i + 1}": ref for i, ref in enumerate(refs)}
+                if input_id not in allowed:
+                    raise ValueError("Input is not assigned to this specialist")
+                selected = store.reference_query(allowed[input_id], full=True)
+                item = selected["value"]
+                if selected["kind"] != "publication-item" or item.get("object_kind") != "file":
+                    raise ValueError("Input is not a frozen file")
+                version = item["object_version"]
+                source = ArtifactStore(root).verify({"path": f".research/objects/{version}", "version": version, "kind": "file"})
+                offset, limit = max(0, int(request.get("offset", 0))), max(1, min(8192, int(request.get("limit", 8192))))
+                content = source.read_text(encoding="utf-8")
+                end = min(len(content), offset + limit)
+                value = {"input_id": input_id, "text": content[offset:end], "next_offset": end if end < len(content) else None}
             elif method == "specialist_finish":
                 value = store.specialist_finish(
                     {**request.get("fields", {}), "parent_session_id": session_id,},

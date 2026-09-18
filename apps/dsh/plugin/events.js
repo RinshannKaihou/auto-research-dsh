@@ -65,6 +65,7 @@ export function registerResearchEvents(ctx, domain) {
         new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('research memory timeout')), timeoutMs); }),
       ]);
       clearTimeout(timer);
+      if (view.context_mode) domain.specialistModes.set(agent.id, view.context_mode);
       const text = `Research context:\n${view.text}`;
       memory.set(agent.id, { text, sourceDigest: view.source_digest, stale: false });
       void domain.request(agent, 'context_record', { fields: {
@@ -96,7 +97,12 @@ export function registerResearchEvents(ctx, domain) {
     await domain.ensureSpecialist(agent);
     const text = await assembledMemory(agent, purpose);
     if (!text) return assembled;
-    return { ...assembled, contexts: [
+    // The host's subagent tool is contributed separately from tools.restrict.
+    // Keep the visible schema consistent with the runtime guard as well.
+    const blind = domain.specialistModes.get(agent.id) === 'blind';
+    const specialist = domain.sessionRoles.get(agent.id) === 'specialist';
+    const tools = (assembled.tools ?? []).filter(tool => blind ? tool.name === 'research_read_input' : !specialist || tool.name !== 'subagent');
+    return { ...assembled, tools, contexts: [
       ...assembled.contexts.filter(item => item.name !== 'research:memory'),
       { name: 'research:memory', text },
     ] };

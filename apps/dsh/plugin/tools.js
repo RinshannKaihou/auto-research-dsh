@@ -22,6 +22,25 @@ function tool(domain, definition) {
   });
 }
 
+const specialistParameters = {
+        label: { type: 'string', required: true },
+        question: { type: 'string', required: true },
+        purpose: { type: 'string', required: true },
+        inputs: { type: 'array', items: { type: 'string' } },
+        tool_scope: { type: 'array', items: { type: 'string' } },
+        node_id: { type: 'string' },
+        context_mode: { type: 'string', enum: ['research', 'blind'] },
+        deliverable: { type: 'string', required: true },
+        completion_criteria: { type: 'string', required: true },
+        report_requirements: { type: 'string', required: true },
+      };
+function specialistArgs(args) {
+  const inputDescription = args.context_mode === 'blind'
+    ? (args.inputs ?? []).map((_, i) => `input-${i + 1}`)
+    : args.inputs ?? [];
+  return { ...args, prompt: `Question: ${args.question}\nPurpose: ${args.purpose}\nAssigned inputs: ${JSON.stringify(inputDescription)}\nDeliverable: ${args.deliverable}\nCompletion criteria: ${args.completion_criteria}\nReport requirements: ${args.report_requirements}\nPreserve uncertainty; return incomplete when evidence is insufficient.` };
+}
+
 export function registerResearchTools(ctx, domain) {
   const definitions = [
     tool(domain, {
@@ -37,23 +56,27 @@ export function registerResearchTools(ctx, domain) {
     tool(domain, {
       name: 'research_delegate',
       description: 'Start one bounded native specialist in the current node. It receives fixed research context, reads the ledger, and cannot write research records or delegate recursively.',
-      timeoutMs: 600000,
+      timeoutMs: domain.specialistTimeoutMs + 60000,
       isConcurrencySafe: () => false,
-      parameters: {
-        label: { type: 'string', required: true },
-        question: { type: 'string', required: true },
-        purpose: { type: 'string', required: true },
-        inputs: { type: 'array', items: { type: 'string' } },
-        tool_scope: { type: 'array', items: { type: 'string' } },
-        node_id: { type: 'string' },
-        deliverable: { type: 'string', required: true },
-        completion_criteria: { type: 'string', required: true },
-        report_requirements: { type: 'string', required: true },
-      },
-      invoke: (args, exec, id) => domain.delegate(exec.agent, {
-        ...args,
-        prompt: `Question: ${args.question}\nPurpose: ${args.purpose}\nFixed inputs: ${JSON.stringify(args.inputs ?? [])}\nDeliverable: ${args.deliverable}\nCompletion criteria: ${args.completion_criteria}\nReport requirements: ${args.report_requirements}\nPreserve uncertainty and return an explicit incomplete result when evidence is insufficient.`,
-      }, exec, id, 'domain'),
+      parameters: specialistParameters,
+      invoke: (args, exec, id) => domain.delegate(exec.agent, specialistArgs(args), exec, id),
+    }),
+    tool(domain, {
+      name: 'research_delegate_batch', description: 'Synchronously run a bounded batch of independent read-only specialists in parallel. Returns each result; do not use research_wait for specialists.',
+      timeoutMs: domain.specialistTimeoutMs + 60000, isConcurrencySafe: () => false,
+      parameters: { tasks: { type: 'array', required: true, items: { type: 'object', properties: specialistParameters, additionalProperties: false } } },
+      invoke: (args, exec, id) => domain.delegateBatch(exec.agent, { tasks: args.tasks.map(specialistArgs) }, exec, id),
+    }),
+    tool(domain, {
+      name: 'research_read_input', description: 'Read an assigned frozen input by opaque input_id. Offset and limit count Unicode characters; follow next_offset until null.',
+      method: 'specialist_read_input',
+      parameters: { input_id: { type: 'string', required: true }, offset: { type: 'number' }, limit: { type: 'number' } },
+      map: args => args,
+    }),
+    tool(domain, {
+      name: 'research_verify_specialist', description: 'Verify a stuck specialist against native execution facts and settle it if exited. Never edit the research database to free a slot. Active or uncertain tasks stay unchanged.',
+      parameters: { task_id: { type: 'string', required: true } },
+      invoke: (args, exec, id) => domain.verifySpecialist(exec.agent, args.task_id, id),
     }),
     tool(domain, {
       name: 'research_query',
@@ -139,7 +162,7 @@ export function registerResearchTools(ctx, domain) {
         }
         const state = await domain.state(exec.agent);
         if (!['main','node_core','exploration'].includes(state.workflow.session?.role)) throw new Error('This session cannot start a consolidation reviewer');
-        const nodeId = args.node_id ?? state.attempt?.node_id ?? state.workflow.session?.node_id;
+        const nodeId = state.workflow.session?.role === 'main' ? null : state.attempt?.node_id ?? state.workflow.session?.node_id;
         const todo = await domain.request(exec.agent, 'review_todo_next', { node_id: nodeId });
         if (todo) await domain.request(exec.agent, 'review_todo_state', { todo_id: todo.todo_id, state: 'running' }, `${id}:todo-running`);
         const inputs = [...new Set([...(args.evidence_refs ?? []), ...(todo ? [todo.trigger_ref] : [])])];

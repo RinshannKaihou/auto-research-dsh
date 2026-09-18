@@ -24,7 +24,9 @@ function agentFor(ctx, sessionId) {
 
 export function registerNativeSubagentGuard(ctx, domain) {
   return ctx.tools.guard(exec => {
-    if (exec.name !== 'subagent' || !exec.agent || !domain.managedRole(exec.agent)) return undefined;
+    if (exec.name !== 'subagent' || !exec.agent) return undefined;
+    if (domain.sessionRoles?.get(exec.agent.id) === 'specialist') return 'Read-only specialists cannot start another agent';
+    if (!domain.managedRole(exec.agent)) return undefined;
     return 'Managed research executors must use research_delegate so specialist identity, lineage, usage, and exit state are recorded.';
   });
 }
@@ -45,7 +47,7 @@ export function apply(ctx, config = {}) {
     order: 700,
     text: [
       'When this native session is associated with a research project, use research_* tools to preserve durable research structure.',
-      'Use DSH native tools for actual work. Publications may be partial and do not imply scientific validation. Finish work segments and close nodes explicitly.',
+      'Main coordinates and dispatches; node_core owns full experiments. Specialists are read-only. Publications may be partial and do not imply scientific validation. Only node_core finishes work segments. Never edit .research or issue SQL repairs; use research_verify_specialist.',
       'Do not start autonomous research unless the user enabled it through /research auto.',
       'In manual mode, start a consolidation reviewer only when the user explicitly asks for consolidation or review.',
     ].join('\n'),

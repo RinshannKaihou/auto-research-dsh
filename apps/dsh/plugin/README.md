@@ -1,11 +1,11 @@
-# auto-research-v5 0.6.4
+# auto-research-v5 0.6.5
 
 这是安装在正式 DSH 内的研究插件。DSH 继续负责模型请求、原生工具、会话轨迹、goal、subagent、权限与取消；插件增加研究项目、知识、材料、并行探索、节点专家和恢复工作流。Python 3.11+ 私有进程只处理 SQLite 与文件事务，不调用模型，也不运行独立研究循环。
 
 ## 安装与开始
 
 ```bash
-dsh plugin --profile web add ./auto-research-v5-0.6.4.tgz --offline
+dsh plugin --profile web add ./auto-research-v5-0.6.5.tgz --offline
 dsh web
 ```
 
@@ -107,3 +107,20 @@ PYTHONPATH=python python3 -m auto_research.maintenance_cli \
 - 根、前驱和固定输入在提案事务中一并校验；调度依赖方向为 predecessor → successor 并防环，修订/分支关系保留其非调度语义。
 - `research_finish` 在节点核心上表示完成意图；阶段材料继续用 `research_publish`，等待依赖用 `research_wait`。主协调会话不能用节点 finish 意外暂停整个项目。
 - 空白会话命令回执使用 DSH 公开 dock 与 `command/executed` 事件，不伪造用户/助手消息，也不触发模型。
+
+
+## 0.6.5 修正：角色、专家与盲评
+
+每个执行节点保留一个核心 Agent，完成规划、实验和分析。主协调负责盘点、计划、派发、综合和接续，不直接承接完整实验；节点专家的身份来自调用者，传入 node_id 只能检查是否一致。主协调的项目级专家通过 research_memory(action="consolidate") 启动。
+
+- `research_delegate` 是同步单项委派；`research_delegate_batch({tasks})` 是有界同步并行，默认最多两项。超额批次不启动任何专家，不产生后台队列。每项分别报告结果和退出状态。
+- `specialistTimeoutMs` 默认为 600000，可在插件配置调整；宿主工具另留 60000 ms 收尾时间。Stop 传递给整批子会话，单项失败不取消兄弟任务。
+- 普通专家默认只能使用 read、research_query、research_read_input；tool_scope 只能缩小这个集合。
+- `context_mode="blind"` 强制使用原生 spawn 新会话，不复制父对话。inputs 必须是已冻结文件的 `pub/P-…#item` 引用。专家只能看到 input-1 等句柄，使用 `research_read_input({input_id,offset,limit})` 读取；offset/limit 按 Unicode 字符计，单页最多 8192 字符。不能访问研究记忆、guidance、通用文件读取或另开 Agent。材料提供者负责匿名化、选择正确协议及不泄露答案；框架不猜测或清洗自然语言里的标签线索。
+- 完整结果保存为 ArtifactStore 文件，task.result.artifact 提供引用；预览最多 1600 字符。只归档最终文本及结构化交付内容，不将 reasoning/tool-call 当作答案。主执行者可读取引用中的完整 JSON；历史 inline result 保持可读。
+- `research_verify_specialist({task_id})` 与 `/research verify-specialist <id>` 使用同一核实逻辑，可处理遗留 running、unverified 和退出未核实的终态。活跃任务不被误结算，不重跑模型。持久化失败时回执明确 `persisted=false`；存储恢复后再核实。
+- 只通过研究工具修改账本，不用 SQL 或 shell 修改 .research 来解锁。这里是操作约束，不是同 Unix 用户的文件权限隔离。
+
+init/manual 用于项目建立和规划，auto 开启自动推进。用户要求计划确认时先提交整份计划，澄清问题的回答不自动批准整份计划；已经授权启动时不重复确认。计划/checkpoint 记录接受标准；最终报告逐项列出证据、缺口与终止原因。阶段材料 complete 不代表科学验收通过，pending review 不构成额外审批门。
+
+schema 6 只新增 specialist_tasks.context_mode，旧任务默认 research，旧 result 不改写。首次打开 schema 5 库时创建 schema-5-backup.sqlite3，再事务升级；旧插件拒绝写 schema 6。回滚使用旧版兼容副本并保留升级后材料，不能直接降库。本次安装包不替用户安装、重启或修复真实研究项目。
