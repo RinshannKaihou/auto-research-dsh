@@ -330,48 +330,7 @@ class NativeService:
         refs = list(node["inputs"])
         if node.get("anchor_ref") and node["anchor_ref"] not in refs:
             refs.append(node["anchor_ref"])
-        materialized = []
-        index = []
-        for ref in refs:
-            product = None
-            entry = {"ref": ref, "materialized": False}
-            selected = store.reference_query(ref, full=True)
-            if selected["kind"] == "publication-item":
-                item = selected["value"]
-                entry.update(
-                    {
-                        "kind": item["kind"],
-                        "content": item["content"],
-                        "publication_id": item["publication_id"],
-                    }
-                )
-                if item.get("object_version"):
-                    object_kind = item.get("object_kind")
-                    if object_kind is None:
-                        archived = root / ".research" / "objects" / item["object_version"]
-                        object_kind = "directory" if archived.is_dir() else "file"
-                    product = {
-                        "path": f".research/objects/{item['object_version']}",
-                        "version": item["object_version"],
-                        "kind": object_kind,
-                    }
-            elif selected["kind"] == "legacy-ref":
-                old = selected["value"]
-                entry.update({"kind": old["kind"], "legacy": True})
-                if old["kind"] == "product" and isinstance(old["item"], dict):
-                    product = {key: old["item"].get(key) for key in ("path", "version", "kind")}
-            elif selected["kind"] in {"node", "knowledge"}:
-                entry.update({"kind": selected["kind"]})
-            else:
-                raise ValueError(f"Unknown research reference: {ref}")
-            if product and all(product.values()):
-                token = hashlib.sha256(ref.encode()).hexdigest()[:16]
-                materialized.append(
-                    {"node_id": "input", "product_id": f"ref-{token}", "product": product,}
-                )
-                entry["materialized"] = True
-                entry["path"] = f"inputs/input/ref-{token}"
-            index.append(entry)
+        index, materialized = self._resolve_branch_inputs(store, root, refs)
         digest = hashlib.sha256(operation_id.encode()).hexdigest()[:12]
         workspace = ArtifactStore(root).prepare_workspace(f"branch-{digest}", materialized)
         index_path = workspace / "research-inputs.json"
@@ -381,6 +340,7 @@ class NativeService:
                     "node_id": node_id,
                     "strategy": node.get("strategy", "continue"),
                     "anchor_ref": node.get("anchor_ref"),
+                    "declared_inputs": refs,
                     "inputs": index,
                 },
                 ensure_ascii=False,
@@ -400,6 +360,113 @@ class NativeService:
         }
         self._write_intent(intent_path, value)
         return value
+
+    def _validate_branch_inputs(
+        self, store: NativeStore, root: Path, node_id: object
+    ) -> dict:
+        if not isinstance(node_id, str) or not node_id:
+            raise ValueError("node_id is required")
+        try:
+            selected = store.reference_query(node_id, full=True)
+        except Exception as exc:
+            raise ValueError(f"Unknown research node: {node_id}") from exc
+        if selected["kind"] != "node" or selected["value"]["status"] == "closed":
+            raise ValueError(f"Unknown or closed research node: {node_id}")
+        node = selected["value"]
+        refs = list(node["inputs"])
+        if node.get("anchor_ref") and node["anchor_ref"] not in refs:
+            refs.append(node["anchor_ref"])
+        index, _ = self._resolve_branch_inputs(store, root, refs)
+        return {"node_id": node_id, "declared_inputs": refs, "inputs": index}
+
+    @staticmethod
+    def _resolve_branch_inputs(
+        store: NativeStore, root: Path, refs: list[str]
+    ) -> tuple[list[dict], list[dict]]:
+        """Resolve declared inputs for both dispatch validation and materialization."""
+        materialized = []
+        index = []
+        seen: set[str] = set()
+
+        def add_publication_item(declared_ref: str, item: dict) -> None:
+            concrete_ref = f"pub/{item['publication_id']}#{item['item_id']}"
+            if concrete_ref in seen:
+                return
+            seen.add(concrete_ref)
+            entry = {
+                "ref": concrete_ref,
+                "declared_ref": declared_ref,
+                "materialized": False,
+                "kind": item["kind"],
+                "content": item["content"],
+                "publication_id": item["publication_id"],
+            }
+            if item.get("object_version"):
+                archived = root / ".research" / "objects" / item["object_version"]
+                if not archived.exists():
+                    raise ValueError(
+                        f"Frozen object is missing for research input {concrete_ref}: "
+                        f"{item['object_version']}"
+                    )
+                object_kind = item.get("object_kind") or (
+                    "directory" if archived.is_dir() else "file"
+                )
+                if object_kind not in {"file", "directory"} or (
+                    object_kind == "directory"
+                ) != archived.is_dir():
+                    raise ValueError(
+                        f"Frozen object kind does not match for research input {concrete_ref}"
+                    )
+                token = hashlib.sha256(concrete_ref.encode()).hexdigest()[:16]
+                materialized.append(
+                    {
+                        "node_id": "input",
+                        "product_id": f"ref-{token}",
+                        "product": {
+                            "path": f".research/objects/{item['object_version']}",
+                            "version": item["object_version"],
+                            "kind": object_kind,
+                        },
+                    }
+                )
+                entry["materialized"] = True
+                entry["path"] = f"inputs/input/ref-{token}"
+            index.append(entry)
+
+        for ref in refs:
+            product = None
+            try:
+                selected = store.reference_query(ref, full=True)
+            except Exception as exc:
+                raise ValueError(f"Research input does not exist: {ref}") from exc
+            if selected["kind"] == "publication-item":
+                add_publication_item(ref, selected["value"])
+                continue
+            if selected["kind"] == "publication":
+                for item in selected["value"].get("items", []):
+                    add_publication_item(ref, item)
+                continue
+            entry = {"ref": ref, "declared_ref": ref, "materialized": False}
+            if selected["kind"] == "legacy-ref":
+                old = selected["value"]
+                entry.update({"kind": old["kind"], "legacy": True})
+                if old["kind"] == "product" and isinstance(old["item"], dict):
+                    product = {key: old["item"].get(key) for key in ("path", "version", "kind")}
+            elif selected["kind"] in {"node", "knowledge"}:
+                entry.update({"kind": selected["kind"]})
+            else:
+                raise ValueError(
+                    f"Research reference cannot be used as an input: {ref} ({selected['kind']})"
+                )
+            if product and all(product.values()):
+                token = hashlib.sha256(ref.encode()).hexdigest()[:16]
+                materialized.append(
+                    {"node_id": "input", "product_id": f"ref-{token}", "product": product,}
+                )
+                entry["materialized"] = True
+                entry["path"] = f"inputs/input/ref-{token}"
+            index.append(entry)
+        return index, materialized
 
     def restore_preview(self, store, root, snapshot_id, session_id):
         selected = store.reference_query(snapshot_id, full=True)
@@ -1148,6 +1215,8 @@ class NativeService:
                 value = self._prepare_branch(
                     store, root, request.get("node_id"), self._operation(request)
                 )
+            elif method == "validate_branch_inputs":
+                value = self._validate_branch_inputs(store, root, request.get("node_id"))
             elif method == "prepare_restore":
                 operation_id = self._operation(request)
                 preview = self.restore_preview(store, root, request["snapshot_id"], session_id)

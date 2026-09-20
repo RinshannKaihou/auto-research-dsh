@@ -44,7 +44,7 @@ export function createResearchGraph(React, layoutGraph, inViewport, clampZoom) {
       const forward=b.x>a.x, x1=a.x+(forward?260:0),x2=b.x+(forward?0:260),y1=a.y+64,y2=b.y+64;
       const sameColumn=a.x===b.x, side=b.y>a.y?1:-1, sx=a.x+(side>0?260:0), bend=sx+side*100;
       const d=sameColumn?`M${sx},${y1} C${bend},${y1} ${bend},${y2} ${sx},${y2}`:forward?`M${x1},${y1} C${x1+65},${y1} ${x2-65},${y2} ${x2},${y2}`:`M${x1},${y1} C${x1-80},${y1-130} ${x2+80},${y2-130} ${x2},${y2}`;
-      const kind=e.records.some(r=>r.kind==='relation')?'relation':e.records.some(r=>r.kind==='anchor')?'anchor':'input';
+      const kind=e.records.some(r=>r.label==='lineage_correction')?'lineage':e.records.some(r=>r.kind==='relation')?'relation':e.records.some(r=>r.kind==='anchor')?'anchor':'input';
       const label=e.records.length>1?`${e.records[0].label} +${e.records.length-1}`:e.records[0].label;
       return h('g',{key:e.id,className:`ari-edge ari-${kind}`,role:'button',tabIndex:0,'aria-label':`${e.source} → ${e.target}: ${label}`,onClick:()=>onEdge(e),onKeyDown:event=>{if(['Enter',' '].includes(event.key)){event.preventDefault();onEdge(e);}}},
         h('title',null,e.records.map(r=>`${r.source_ref} → ${r.target_ref}: ${r.label}`).join('\n')),
@@ -52,7 +52,7 @@ export function createResearchGraph(React, layoutGraph, inViewport, clampZoom) {
         h('text',{x:sameColumn?sx+side*78:(x1+x2)/2,y:(y1+y2)/2-(sameColumn?8:forward?10:96),textAnchor:sameColumn?(side>0?'start':'end'):'middle'},label.length>24?label.slice(0,23)+'…':label));
     });
     return h('div',{className:'ari-graph-shell'},
-      h('div',{className:'ari-graph-tools'},h('span',null,'实线：关系 · 虚线：输入 · 点线：锚点'),
+      h('div',{className:'ari-graph-tools'},h('span',null,'实线：原始关系 · 补录：lineage_correction · 虚线：输入 · 点线：锚点'),
         h('button',{onClick:()=>zoom(1/1.25),'aria-label':'缩小研究图'},'−'),h('span',{'aria-live':'polite'},`${Math.round(camera.k*100)}%`),
         h('button',{onClick:()=>zoom(1.25),'aria-label':'放大研究图'},'+'),h('button',{onClick:fit},'适应全部')),
       h('div',{ref:root,className:'ari-canvas',onPointerDown:e=>{moved.current=false;if(e.button!==0 || e.target.closest('[role="button"]'))return;moved.current=false;drag.current={x:e.clientX,y:e.clientY,camera};e.currentTarget.setPointerCapture(e.pointerId);},
@@ -60,7 +60,7 @@ export function createResearchGraph(React, layoutGraph, inViewport, clampZoom) {
         onPointerUp:()=>{drag.current=null;},onPointerCancel:()=>{drag.current=null;},
         onWheel:e=>{if(e.ctrlKey||e.metaKey){e.preventDefault();zoom(e.deltaY>0?1/1.1:1.1);}}},
         h('svg',{width:'100%',height:'100%',role:'group','aria-label':'研究节点图。使用方向键浏览节点，回车查看详情。'},
-          h('defs',null,...['relation','input','anchor'].map(kind=>h('marker',{key:kind,id:`${marker}-${kind}`,viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:7,markerHeight:7,orient:'auto'},h('path',{d:'M 0 0 L 10 5 L 0 10 z',fill:kind==='anchor'?'#b77a33':'#7c8c97'})))),
+          h('defs',null,...['relation','lineage','input','anchor'].map(kind=>h('marker',{key:kind,id:`${marker}-${kind}`,viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:7,markerHeight:7,orient:'auto'},h('path',{d:'M 0 0 L 10 5 L 0 10 z',fill:kind==='anchor'?'#b77a33':kind==='lineage'?'#8b5cf6':'#7c8c97'})))),
           h('g',{transform:`translate(${camera.x} ${camera.y}) scale(${camera.k})`},...curves,
             ...visible.map(n=>{const p=layout.positions.get(n.node_id);return h('g',{key:n.node_id,transform:`translate(${p.x} ${p.y})`,className:`ari-node ${n.status==='closed'?'ari-closed':''} ${selected===n.node_id?'ari-selected':''} ${focused===n.node_id?'ari-focused':''}`,
               role:'button',tabIndex:0,'data-status':n.status,'data-node-id':n.node_id,'aria-label':`${n.node_id} ${n.status} ${n.question}`,'aria-pressed':selected===n.node_id,
@@ -68,7 +68,7 @@ export function createResearchGraph(React, layoutGraph, inViewport, clampZoom) {
               h('title',null,n.question),h('rect',{width:260,height:128,rx:10}),
               h('text',{x:16,y:25,className:'ari-node-id'},n.node_id),h('text',{x:244,y:25,textAnchor:'end',className:'ari-node-status'},`${n.status}${focused===n.node_id?' · 当前':''}`),
               h('foreignObject',{x:16,y:37,width:228,height:49},h('div',{className:'ari-node-question'},n.question)),
-              h('text',{x:16,y:110,className:'ari-node-meta'},`${n.strategy ?? 'continue'} · ${n.attempts.length} 工作段 · ${n.publications.length} 发布`));}))),
+              h('text',{x:16,y:110,className:'ari-node-meta'},`${n.lineage_corrected?'谱系已补录 · ':''}${n.strategy ?? 'continue'} · ${n.attempts.length} 工作段 · ${n.publications.length} 发布`));}))),
         !nodes.length&&h('p',{className:'ari-empty'},model.nodes.length?'没有匹配的节点；清除筛选后查看。':'尚无研究节点。规划工作和材料可在下方查看。')),
       h('span',{className:'ari-sr-only'},`共 ${nodes.length} 个节点，可视区域 ${rendered.size} 个。也可切换列表访问所有节点。`));
   };

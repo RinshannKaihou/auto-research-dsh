@@ -70,7 +70,11 @@ export function projectGraph(state) {
   }
   const edgeList = [...edges.values()].sort((a,b) => a.id.localeCompare(b.id));
   for (const node of nodes.values()) {
-    node.origin_class = node.origin_kind === 'root' && node.root_reason
+    const corrected = node.relations.some(r => r.kind === 'relation' && r.label === 'lineage_correction' && r.target === node.node_id);
+    node.lineage_corrected = corrected;
+    node.origin_class = corrected && node.origin_kind === 'root'
+      ? 'lineage_corrected_root'
+      : node.origin_kind === 'root' && node.root_reason
       ? 'explicit_root'
       : node.origin_kind === 'legacy_unresolved'
         ? 'legacy_unresolved'

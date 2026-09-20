@@ -1,11 +1,11 @@
-# auto-research-v5 0.6.5
+# auto-research-v5 0.6.6
 
 这是安装在正式 DSH 内的研究插件。DSH 继续负责模型请求、原生工具、会话轨迹、goal、subagent、权限与取消；插件增加研究项目、知识、材料、并行探索、节点专家和恢复工作流。Python 3.11+ 私有进程只处理 SQLite 与文件事务，不调用模型，也不运行独立研究循环。
 
 ## 安装与开始
 
 ```bash
-dsh plugin --profile web add ./auto-research-v5-0.6.5.tgz --offline
+dsh plugin --profile web add ./auto-research-v5-0.6.6.tgz --offline
 dsh web
 ```
 

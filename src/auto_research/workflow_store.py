@@ -232,7 +232,7 @@ class WorkflowStore:
                 fields["kind"],
                 fields.get("reference"),
                 encoded(body),
-                "pending",
+                "claimed" if fields.get("silent") else "pending",
                 now(),
             ),
         )
@@ -491,6 +491,20 @@ class WorkflowStore:
                         at,
                         task["task_id"],
                     ),
+                )
+            elif action == "task_verified_failed":
+                task = db.execute(
+                    "SELECT * FROM exploration_tasks WHERE task_id=?", (fields["task_id"],)
+                ).fetchone()
+                if not task:
+                    raise NotFoundError("Unknown task")
+                if task["state"] == "failed":
+                    return dict(task)
+                if task["state"] != "unverified":
+                    raise ConflictError("Task is not awaiting creation verification")
+                db.execute(
+                    "UPDATE exploration_tasks SET state='failed',updated_at=? WHERE task_id=?",
+                    (at, task["task_id"]),
                 )
             elif action == "task_resumed":
                 task = db.execute(

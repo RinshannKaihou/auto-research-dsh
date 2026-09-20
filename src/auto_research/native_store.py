@@ -1117,6 +1117,34 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
             if active:
                 raise ConflictError("Finish active work before closing its node")
             at = _now()
+            pending = list(
+                db.execute(
+                    "SELECT task_id,state FROM exploration_tasks WHERE node_id=? "
+                    "AND state IN ('queued','starting','running','waiting','stopping','unverified')",
+                    (node_id,),
+                )
+            )
+            blocked = [row for row in pending if row["state"] != "queued"]
+            if blocked:
+                task_ids = ", ".join(row["task_id"] for row in blocked)
+                raise ConflictError(
+                    f"Node has executing or unverified tasks ({task_ids}); use "
+                    "research_verify_task for unverified creation before closing"
+                )
+            for task in pending:
+                db.execute(
+                    "UPDATE exploration_tasks SET state='cancelled',updated_at=? WHERE task_id=?",
+                    (at, task["task_id"]),
+                )
+                self._event(
+                    db,
+                    "workflow.task_state",
+                    {
+                        "task_id": task["task_id"],
+                        "state": "cancelled",
+                        "reason": "node-closed-before-start",
+                    },
+                )
             db.execute(
                 "UPDATE nodes SET status='closed',closed_at=? WHERE node_id=?", (at, node_id)
             )

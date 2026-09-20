@@ -73,7 +73,11 @@ function projectGraph(state) {
   }
   const edgeList = [...edges.values()].sort((a,b) => a.id.localeCompare(b.id));
   for (const node of nodes.values()) {
-    node.origin_class = node.origin_kind === 'root' && node.root_reason
+    const corrected = node.relations.some(r => r.kind === 'relation' && r.label === 'lineage_correction' && r.target === node.node_id);
+    node.lineage_corrected = corrected;
+    node.origin_class = corrected && node.origin_kind === 'root'
+      ? 'lineage_corrected_root'
+      : node.origin_kind === 'root' && node.root_reason
       ? 'explicit_root'
       : node.origin_kind === 'legacy_unresolved'
         ? 'legacy_unresolved'
@@ -183,7 +187,7 @@ function createResearchGraph(React, layoutGraph, inViewport, clampZoom) {
       const forward=b.x>a.x, x1=a.x+(forward?260:0),x2=b.x+(forward?0:260),y1=a.y+64,y2=b.y+64;
       const sameColumn=a.x===b.x, side=b.y>a.y?1:-1, sx=a.x+(side>0?260:0), bend=sx+side*100;
       const d=sameColumn?`M${sx},${y1} C${bend},${y1} ${bend},${y2} ${sx},${y2}`:forward?`M${x1},${y1} C${x1+65},${y1} ${x2-65},${y2} ${x2},${y2}`:`M${x1},${y1} C${x1-80},${y1-130} ${x2+80},${y2-130} ${x2},${y2}`;
-      const kind=e.records.some(r=>r.kind==='relation')?'relation':e.records.some(r=>r.kind==='anchor')?'anchor':'input';
+      const kind=e.records.some(r=>r.label==='lineage_correction')?'lineage':e.records.some(r=>r.kind==='relation')?'relation':e.records.some(r=>r.kind==='anchor')?'anchor':'input';
       const label=e.records.length>1?`${e.records[0].label} +${e.records.length-1}`:e.records[0].label;
       return h('g',{key:e.id,className:`ari-edge ari-${kind}`,role:'button',tabIndex:0,'aria-label':`${e.source} → ${e.target}: ${label}`,onClick:()=>onEdge(e),onKeyDown:event=>{if(['Enter',' '].includes(event.key)){event.preventDefault();onEdge(e);}}},
         h('title',null,e.records.map(r=>`${r.source_ref} → ${r.target_ref}: ${r.label}`).join('\n')),
@@ -191,7 +195,7 @@ function createResearchGraph(React, layoutGraph, inViewport, clampZoom) {
         h('text',{x:sameColumn?sx+side*78:(x1+x2)/2,y:(y1+y2)/2-(sameColumn?8:forward?10:96),textAnchor:sameColumn?(side>0?'start':'end'):'middle'},label.length>24?label.slice(0,23)+'…':label));
     });
     return h('div',{className:'ari-graph-shell'},
-      h('div',{className:'ari-graph-tools'},h('span',null,'实线：关系 · 虚线：输入 · 点线：锚点'),
+      h('div',{className:'ari-graph-tools'},h('span',null,'实线：原始关系 · 补录：lineage_correction · 虚线：输入 · 点线：锚点'),
         h('button',{onClick:()=>zoom(1/1.25),'aria-label':'缩小研究图'},'−'),h('span',{'aria-live':'polite'},`${Math.round(camera.k*100)}%`),
         h('button',{onClick:()=>zoom(1.25),'aria-label':'放大研究图'},'+'),h('button',{onClick:fit},'适应全部')),
       h('div',{ref:root,className:'ari-canvas',onPointerDown:e=>{moved.current=false;if(e.button!==0 || e.target.closest('[role="button"]'))return;moved.current=false;drag.current={x:e.clientX,y:e.clientY,camera};e.currentTarget.setPointerCapture(e.pointerId);},
@@ -199,7 +203,7 @@ function createResearchGraph(React, layoutGraph, inViewport, clampZoom) {
         onPointerUp:()=>{drag.current=null;},onPointerCancel:()=>{drag.current=null;},
         onWheel:e=>{if(e.ctrlKey||e.metaKey){e.preventDefault();zoom(e.deltaY>0?1/1.1:1.1);}}},
         h('svg',{width:'100%',height:'100%',role:'group','aria-label':'研究节点图。使用方向键浏览节点，回车查看详情。'},
-          h('defs',null,...['relation','input','anchor'].map(kind=>h('marker',{key:kind,id:`${marker}-${kind}`,viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:7,markerHeight:7,orient:'auto'},h('path',{d:'M 0 0 L 10 5 L 0 10 z',fill:kind==='anchor'?'#b77a33':'#7c8c97'})))),
+          h('defs',null,...['relation','lineage','input','anchor'].map(kind=>h('marker',{key:kind,id:`${marker}-${kind}`,viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:7,markerHeight:7,orient:'auto'},h('path',{d:'M 0 0 L 10 5 L 0 10 z',fill:kind==='anchor'?'#b77a33':kind==='lineage'?'#8b5cf6':'#7c8c97'})))),
           h('g',{transform:`translate(${camera.x} ${camera.y}) scale(${camera.k})`},...curves,
             ...visible.map(n=>{const p=layout.positions.get(n.node_id);return h('g',{key:n.node_id,transform:`translate(${p.x} ${p.y})`,className:`ari-node ${n.status==='closed'?'ari-closed':''} ${selected===n.node_id?'ari-selected':''} ${focused===n.node_id?'ari-focused':''}`,
               role:'button',tabIndex:0,'data-status':n.status,'data-node-id':n.node_id,'aria-label':`${n.node_id} ${n.status} ${n.question}`,'aria-pressed':selected===n.node_id,
@@ -207,7 +211,7 @@ function createResearchGraph(React, layoutGraph, inViewport, clampZoom) {
               h('title',null,n.question),h('rect',{width:260,height:128,rx:10}),
               h('text',{x:16,y:25,className:'ari-node-id'},n.node_id),h('text',{x:244,y:25,textAnchor:'end',className:'ari-node-status'},`${n.status}${focused===n.node_id?' · 当前':''}`),
               h('foreignObject',{x:16,y:37,width:228,height:49},h('div',{className:'ari-node-question'},n.question)),
-              h('text',{x:16,y:110,className:'ari-node-meta'},`${n.strategy ?? 'continue'} · ${n.attempts.length} 工作段 · ${n.publications.length} 发布`));}))),
+              h('text',{x:16,y:110,className:'ari-node-meta'},`${n.lineage_corrected?'谱系已补录 · ':''}${n.strategy ?? 'continue'} · ${n.attempts.length} 工作段 · ${n.publications.length} 发布`));}))),
         !nodes.length&&h('p',{className:'ari-empty'},model.nodes.length?'没有匹配的节点；清除筛选后查看。':'尚无研究节点。规划工作和材料可在下方查看。')),
       h('span',{className:'ari-sr-only'},`共 ${nodes.length} 个节点，可视区域 ${rendered.size} 个。也可切换列表访问所有节点。`));
   };
@@ -247,6 +251,7 @@ function createResearchDetails(React) {
     if(!node) return h('aside',{className:'ari-details ari-detail-empty'},h('h3',null,'选择一个研究节点'),h('p',null,'查看计划、固定输入、阶段材料和全部工作段。选中节点不会启动研究。'));
     return h('aside',{className:'ari-details','aria-label':'节点详情'},h('button',{onClick:onClose},'关闭详情'),
       h('small',null,`${node.node_id} · ${node.status} · ${node.strategy??'continue'}`),h('h3',null,node.question),
+      node.lineage_corrected&&h('p',{role:'status'},'谱系已补录／原始声明为根节点'),
       h('div',{className:'ari-actions'},h('button',{disabled,onClick:()=>act('discussion.open',{nodeId:node.node_id})},'围绕此节点讨论'),h('details',null,h('summary',null,'更多'),h('button',{disabled,onClick:()=>act('discussion.open',{nodeId:node.node_id,fresh:true})},'新建另一场讨论'))),
       section('议程锚',h('p',null,node.question_ref??'旧节点尚无可确认的问题版本')),
       section('提出理由',h('p',{className:'ari-preserve'},node.why_now||'未记录')),
@@ -266,6 +271,7 @@ const researchStyles = `
 .ari-details{border-left:1px solid var(--ari-line);padding-left:16px;max-height:640px;overflow:auto;overflow-wrap:anywhere}.ari-details>button:first-child{float:right;font-size:11px;margin:0 0 8px 8px}.ari-details>small{display:block;color:var(--ari-accent);margin-bottom:10px}.ari-detail-empty{color:inherit;opacity:.7;padding-top:32px}.ari-detail-section{padding:16px 0;border-bottom:1px solid var(--ari-line)}.ari-detail-section article{margin:12px 0;padding:10px;border:1px solid var(--ari-line);border-radius:6px}.ari-detail-section p,.ari-detail-section details{font-size:12px}.ari-v5 details{margin:8px 0}.ari-v5 summary{cursor:pointer;overflow-wrap:anywhere}.ari-v5 pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px}.ari-preserve{white-space:pre-wrap}.ari-relations{padding-left:18px;font-size:12px}.ari-relations li{margin:12px 0}.ari-list{list-style:none;padding:0;margin:0;max-height:600px;overflow:auto}.ari-list button{display:block;width:100%;text-align:left;margin-bottom:8px;padding:14px}.ari-list strong{color:var(--ari-accent)}.ari-list span{display:block;margin-top:6px}.ari-list small{display:block;margin-top:8px;opacity:.7}.ari-section{border:1px solid var(--ari-line);border-radius:10px;padding:14px;margin-top:16px;overflow-wrap:anywhere}.ari-section>summary{font-weight:600}.ari-empty{padding:32px;opacity:.7}.ari-canvas>.ari-empty{position:absolute;top:30px;left:0;pointer-events:none}.ari-alert{padding:12px;border:1px solid #b77a33;border-radius:6px;margin:12px 0}.ari-alert button{margin-left:12px}.ari-updated{font-size:11px;opacity:.65;margin-left:auto}.ari-sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
 .ari-receipt{--ari-accent:#328c98;--ari-line:var(--dsw-alias-border-l2,var(--border-color,#89969b55));--ari-paper:var(--dsw-alias-bg-base,var(--background-color,Canvas));display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid color-mix(in srgb,var(--ari-accent) 45%,var(--ari-line));border-radius:9px;background:color-mix(in srgb,var(--ari-paper) 92%,var(--ari-accent));font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.ari-receipt-mark{display:grid;place-items:center;width:26px;height:26px;border-radius:6px;background:var(--ari-accent);color:var(--ari-paper);font-weight:800}.ari-receipt-copy{display:grid;gap:1px;min-width:0}.ari-receipt-copy strong,.ari-receipt-copy small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.ari-receipt-entry{margin-left:auto;font-size:12px;color:var(--ari-accent);white-space:nowrap}.ari-receipt-error{border-color:#b45353;background:color-mix(in srgb,var(--ari-paper) 92%,#b45353)}.ari-receipt-error .ari-receipt-mark{background:#b45353}
 .ari-receipt{display:block;max-width:100%}.ari-receipt-row{display:flex;align-items:center;gap:10px;min-width:0}.ari-receipt-copy{flex:1}.ari-receipt-mark{flex-shrink:0}.ari-receipt button,.ari-dialog-bar button{font:inherit;border:1px solid var(--ari-accent,#328c98);background:transparent;border-radius:6px;padding:6px 10px;cursor:pointer;color:inherit}.ari-receipt button{font-size:12px}.ari-receipt :focus-visible,.ari-dialog-bar :focus-visible{outline:2px solid #328c98;outline-offset:3px}.ari-command-result{margin-top:8px;font-size:12px}.ari-command-result p{margin:0 0 5px}.ari-command-result summary{cursor:pointer}.ari-command-result pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:150px;overflow:auto;margin:6px 0 0;padding:8px;background:var(--ari-paper);border-radius:5px;font:11px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}.ari-receipt-query-error{display:block;margin-top:6px;overflow-wrap:anywhere}.ari-workbench-dialog{box-sizing:border-box;position:fixed;inset:0;width:min(1440px,96vw);height:92dvh;max-width:96vw;max-height:92dvh;margin:auto;padding:0;border:1px solid #328c9866;border-radius:12px;background:var(--dsw-alias-bg-base,Canvas);color:var(--foreground,CanvasText);box-shadow:0 20px 80px #0004}.ari-workbench-dialog[open]{display:flex;flex-direction:column}.ari-workbench-dialog::backdrop{background:#172a3466}.ari-dialog-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 18px;border-bottom:1px solid #89969b55;font:12px ui-monospace,SFMono-Regular,Menlo,monospace;flex-shrink:0}.ari-dialog-content{flex:1;min-height:0;overflow:hidden}.ari-dialog-content>.ari-v5{padding-bottom:24px}
+.ari-edge.ari-lineage path:not(.ari-edge-hit){stroke:#8b5cf6;stroke-width:2.5;stroke-dasharray:10 4}
 /* DSH 0.1.2 chat-width handles span custom conversation slots. Disable their hit area only while Research is mounted; keep the native composer above the graph. */
 [class$="_body"]:has(.ari-v5) > [class$="_widthHandle"][data-side]{pointer-events:none}
 @media(max-width:1000px){.ari-layout{grid-template-columns:minmax(0,1fr)}.ari-details{border-left:0;border-top:1px solid var(--ari-line);padding:16px 0;max-height:none}.ari-canvas{height:440px}}@media(max-width:600px){.ari-v5{padding:12px 12px 200px}.ari-canvas{height:380px}.ari-stats{gap:12px}.ari-stats strong{font-size:16px}.ari-toolbar input{width:100%}.ari-receipt-row{flex-wrap:wrap}.ari-receipt-copy{flex-basis:calc(100% - 40px)}.ari-receipt-entry{display:block;margin-left:36px;white-space:normal}.ari-workbench-dialog{width:98vw;max-width:98vw;height:96dvh;max-height:96dvh}.ari-dialog-bar{padding:10px}}@media(prefers-reduced-motion:reduce){.ari-v5 *{transition:none!important;animation:none!important}}
@@ -275,7 +281,7 @@ function createWorkbench(React, rpc, openSession, projectGraph, ResearchGraph, c
   const h=React.createElement, {Details,Records}=components;
   return function Workbench({sessionId}) {
     const [state,setState]=React.useState(null),[error,setError]=React.useState(null),[notice,setNotice]=React.useState(null);
-    const [preview,setPreview]=React.useState(null);
+    const [preview,setPreview]=React.useState(null),[referencePreview,setReferencePreview]=React.useState(null);
     const [goal,setGoal]=React.useState(''),[busy,setBusy]=React.useState(false),[updated,setUpdated]=React.useState(null);
     const [knowledgeSearch,setKnowledgeSearch]=React.useState(''),[guidancePath,setGuidancePath]=React.useState(''),[guidanceVersion,setGuidanceVersion]=React.useState('');
     const [selected,setSelected]=React.useState(null),[edgeId,setEdgeId]=React.useState(null),[search,setSearch]=React.useState(''),[filter,setFilter]=React.useState('all');
@@ -332,12 +338,14 @@ function createWorkbench(React, rpc, openSession, projectGraph, ResearchGraph, c
       finally{if(life===lifecycle.current){pending.current=false;setBusy(false);}}
     }
     async function navigate(id){try{await openSession(id);}catch(e){setNotice(`无法打开原生会话：${e.message}`);}}
+    async function inspectReference(ref){try{setReferencePreview(await call('reference.get',{ref}));}catch(e){setNotice(`无法读取研究材料：${e.message}`);}}
     const select=id=>{setSelected(id);setEdgeId(null);};
     const btn=(label,endpoint,payload={},off=disabled)=>h('button',{disabled:off,onClick:()=>act(endpoint,payload)},label);
     return h('div',{className:'ari-v5','aria-busy':busy},h('style',null,researchStyles),
       h('header',{className:'ari-header'},h('div',{className:'ari-overline'},'RESEARCH / 研究工作台'),h('h2',null,state?.project.goal??'关联研究项目'),
         state&&h(React.Fragment,null,h('div',{className:'ari-stats'},
           h('span',null,h('strong',null,model.nodes.length),'研究节点'),h('span',null,h('strong',null,runtime?.running_count??'未知'),'实际运行会话'),
+          h('span',null,h('strong',null,runtime?.waiting_approval_count??0),'等待审批'),
           h('span',null,h('strong',null,runtime?.specialist_count??0),'运行中专家'),
           h('span',null,h('strong',null,state.review_queue?.pending_total??'未知'),'待整理'),
           h('span',null,h('strong',null,Number(state.usage.known).toLocaleString()),'已记录 token'),h('span',null,h('strong',null,state.usage.missing??state.usage.unknown_count),'缺失请求')),
@@ -352,8 +360,14 @@ function createWorkbench(React, rpc, openSession, projectGraph, ResearchGraph, c
             ['paused','cold'].includes(runState)&&btn('继续自主研究','resume'),
             ['running','paused','cold','stopping'].includes(runState)&&btn('停止研究','stop'),
             runState==='unverified'&&btn('重新核实停止','verify-stop')))),
+      (runtime?.approvals??[]).length>0&&h('section',{className:'ari-section','aria-label':'待审批'},h('h3',null,'等待原生审批'),
+        ...(runtime.approvals??[]).map(a=>h('article',{key:`${a.session_id}:${a.approval_id}`},
+          h('strong',null,`${a.node_id??'项目规划'} · 等待审批`),h('p',null,a.reason??'未提供原因'),
+          h('small',null,`${a.approval_id}${a.asked_at?` · 自 ${new Date(a.asked_at).toLocaleString()} 起`:''}`),
+          h('button',{onClick:()=>navigate(a.session_id)},'打开审批会话')))),
       error&&h('div',{className:'ari-alert',role:'alert'},state?'连接异常，保留最后成功数据。':'暂时无法读取项目。',` ${error}`,h('button',{onClick:refresh},'重试')),
       notice&&h('p',{role:'status'},notice),
+      referencePreview&&h('section',{className:'ari-section','aria-label':'研究材料'},h('h3',null,'研究材料'),h('pre',null,JSON.stringify(referencePreview,null,2)),h('button',{onClick:()=>setReferencePreview(null)},'关闭材料')),
       preview&&h('section',{className:'ari-section','aria-label':'接手预览'},h('h3',null,'历史文件快照 · 接手预览'),
         h('p',null,`来源：${preview.context.source_attempt_id} · 目标目录：${preview.workspace}`),
         h('pre',null,JSON.stringify(preview.context,null,2)),h('p',null,`未完整保存：${preview.missing.length} 项`),
@@ -380,7 +394,13 @@ function createWorkbench(React, rpc, openSession, projectGraph, ResearchGraph, c
           h(Records,{group:model.planning,state,onSession:navigate,onRestore:snapshotId=>act('restore.preview',{snapshotId}),disabled})),
         h('details',{className:'ari-section',open:true},h('summary',null,`项目知识与未决问题 · ${state.knowledge.length}`),
           h('input',{'aria-label':'搜索项目知识',placeholder:'搜索主张、条件、引用…',value:knowledgeSearch,onChange:e=>setKnowledgeSearch(e.target.value)}),
-          ...knowledgeRows.map(item=>h('article',{key:item.ref},h('strong',null,`${item.ref} · ${item.kind} · ${item.status}`),h('p',{className:'ari-preserve'},typeof item.statement==='string'?item.statement:item.statement?.preview),h('p',null,`条件：${JSON.stringify(item.conditions)} · 来源：${JSON.stringify(item.evidence_refs)}`),item.supersedes?.length>0&&h('small',null,`修订自 ${item.supersedes.join('、')}`))),
+          ...knowledgeRows.map(item=>h('article',{key:item.ref},h('strong',null,`${item.ref} · ${item.kind} · ${item.status}`),
+            h('p',{className:'ari-preserve'},typeof item.statement==='string'?item.statement:item.statement?.preview),
+            h('p',null,h('strong',null,'证据引用：'),item.evidence_refs?.length?item.evidence_refs.map(ref=>h('button',{key:ref,onClick:()=>inspectReference(ref)},ref)):'未关联证据'),
+            h('p',null,h('strong',null,'记录来源：'),item.source_identity&&Object.keys(item.source_identity).length?JSON.stringify(item.source_identity):'未填写',item.source_identity?.session_id&&h('button',{onClick:()=>navigate(item.source_identity.session_id)},'打开来源会话')),
+            h('p',null,h('strong',null,'适用范围：'),item.scope&&Object.keys(item.scope).length?JSON.stringify(item.scope):'未填写'),
+            h('p',null,h('strong',null,'适用条件：'),item.conditions&&Object.keys(item.conditions).length?JSON.stringify(item.conditions):'未填写'),
+            item.supersedes?.length>0&&h('p',null,h('strong',null,'修订历史：'),...item.supersedes.map(ref=>h('button',{key:ref,onClick:()=>inspectReference(ref)},ref))))),
           !knowledgeRows.length&&h('p',{className:'ari-empty'},'没有匹配的知识条目。')),
         h('details',{className:'ari-section'},h('summary',null,`节点检查点 · ${state.checkpoints.length}`),...state.checkpoints.map(item=>h('article',{key:item.checkpoint_id},h('strong',null,`${item.node_id??'项目规划'} · revision ${item.revision}`),h('pre',null,JSON.stringify(item.state,null,2))))),
         h('details',{className:'ari-section'},h('summary',null,`整理与复核待办 · ${(state.review_todos??[]).filter(item=>item.state!=='completed').length}`),...(state.review_todos??[]).filter(item=>item.state!=='completed').map(item=>h('p',{key:item.todo_id},`${item.todo_id} · ${item.node_id??'项目规划'} · ${item.trigger_kind} · ${item.trigger_ref} · ${item.state}`))),
@@ -388,12 +408,13 @@ function createWorkbench(React, rpc, openSession, projectGraph, ResearchGraph, c
         h('details',{className:'ari-section',open:true},h('summary',null,`项目会话 · ${sessionCards.length}`),...sessionCards.map(s=>h('article',{key:s.session_id},
           h('strong',null,`${s.detached?'历史会话':roles[s.role]} · ${s.node_id??'项目规划'}`),h('p',null,`${s.name??s.session_id} · ${s.native_status??'未加载'} · ${reasons[s.pause_reason]??s.pause_reason??'无暂停'}`),
           h('p',null,s.cwd??'目录未知'),h('button',{onClick:()=>navigate(s.session_id)},'打开会话'),
+          s.pending_approvals>0&&h('p',{role:'status'},`等待审批 · ${s.approvals?.[0]?.reason??'未提供原因'}`),
           ['human','native_stop','finished','segment_complete','complete'].includes(s.pause_reason)&&h('button',{disabled,onClick:()=>act('resume',{targetSessionId:s.session_id})},'继续此会话'),
           ['requested','unverified'].includes(s.close_state)&&h('button',{disabled,onClick:()=>act('verify-close',{targetSessionId:s.session_id})},'核实工作段收尾'),
           ['fault','host_limit','unverified'].includes(s.pause_reason)&&h('button',{disabled,onClick:()=>act('retry',{targetSessionId:s.session_id})},'核实并重试'),
           h('details',null,h('summary',null,'关联历史与原生状态'),h('pre',null,JSON.stringify({goal:s.goal,jobs:s.jobs,intervals:state.associations.filter(a=>a.session_id===s.session_id)},null,2)))))),
         h('details',{className:'ari-section'},h('summary',null,`节点内部协作 · ${(state.specialists??[]).length}`),...(state.specialists??[]).map(s=>h('article',{key:s.task_id},h('strong',null,`${s.task_id} · ${s.purpose} · ${s.state}`),h('p',null,`${s.label} · ${s.node_id??'项目规划'} · ${s.context_mode==='blind'?'盲评：仅分配材料':'研究背景'}`),s.child_session_id&&h('button',{onClick:()=>navigate(s.child_session_id)},'打开专家会话'),(['running','unverified'].includes(s.state)||!s.exit_verified)&&h('button',{disabled,onClick:()=>act('verify-specialist',{taskId:s.task_id})},'核实专家退出'),s.error&&h('p',{role:'alert'},s.error)))),
-        h('details',{className:'ari-section',open:blockedCreations.length>0},h('summary',null,'探索任务与恢复'),...(state.tasks??state.workflow?.tasks??[]).map(t=>h('article',{key:t.task_id},h('p',null,`${t.task_id} · ${t.node_id} · ${t.state}${t.error?' · '+t.error:''}`),blockedCreations.some(b=>b.task_id===t.task_id)&&h('p',null,'需要处理：创建结果待核实，保留 1 个研究槽位；未确认前不会自动重新创建。'),['failed','unverified'].includes(t.state)&&h('button',{disabled,onClick:()=>act('retry',{taskId:t.task_id})},'核实并重试创建')))),
+        h('details',{className:'ari-section',open:blockedCreations.length>0},h('summary',null,'探索任务与恢复'),...(state.tasks??state.workflow?.tasks??[]).map(t=>h('article',{key:t.task_id},h('p',null,`${t.task_id} · ${t.node_id} · ${t.state}${t.error?' · '+t.error:''}`),blockedCreations.some(b=>b.task_id===t.task_id)&&h('p',null,'需要处理：创建结果待核实，保留 1 个研究槽位；未确认前不会自动重新创建。'),t.state==='unverified'&&h('button',{disabled,onClick:()=>act('verify-task',{taskId:t.task_id})},'核实是否未启动'),['failed','unverified'].includes(t.state)&&h('button',{disabled,onClick:()=>act('retry',{taskId:t.task_id})},'核实并重试创建')))),
         h('details',{className:'ari-section'},h('summary',null,'高级设置'),
           h('p',null,'科研指导按内容版本登记，只在相关任务上下文中取用方法卡。'),
           state.guidance&&h('p',null,`当前指导：${state.guidance.path} · ${state.guidance.version} · ${state.guidance.content_hash}`),
@@ -465,7 +486,7 @@ function createResearchReceipt(React, Workbench, researchStyles) {
         h('div',{className:'ari-receipt-row'},h('span',{className:'ari-receipt-mark','aria-hidden':'true'},failed?'!':'R'),
           h('span',{className:'ari-receipt-copy'},
             h('strong',null,associated?snapshot.project?.goal??'Research 已关联':'Research / 研究项目'),
-            h('small',null,associated?`${snapshot.project?.control==='auto'?'自动推进已开启':snapshot.project?.control==='manual'?'已初始化 · 规划模式':snapshot.project?.control} · ${snapshot.runtime?.current?.native_status==='running'?'当前对话正在工作':'当前对话空闲'} · schema ${snapshot.schema_version??'?'}`:'初始化与关联无需发送消息或调用模型')),
+            h('small',null,associated?`${snapshot.project?.control==='auto'?'自动推进已开启':snapshot.project?.control==='manual'?'已初始化 · 规划模式':snapshot.project?.control} · ${snapshot.runtime?.current?.pending_approvals?'当前对话等待审批':snapshot.runtime?.current?.native_status==='running'?'当前对话正在工作':'当前对话空闲'} · 待审批 ${snapshot.runtime?.pending_approvals??0} · schema ${snapshot.schema_version??'?'}`:'初始化与关联无需发送消息或调用模型')),
           h('button',{type:'button',className:'ari-receipt-entry','aria-haspopup':'dialog',onClick:()=>setOpened(true)},'打开研究工作台')),
         snapshot?.command&&h('div',{key:snapshot.commandSequence,className:'ari-command-result'},
           h('p',{role:failed?'alert':'status','aria-live':'polite'},`Research 命令${failed?'失败':'已完成'} · 第 ${snapshot.commandSequence} 次 · ${snapshot.commandTime}`),

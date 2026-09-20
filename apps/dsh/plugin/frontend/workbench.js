@@ -2,7 +2,7 @@ export function createWorkbench(React, rpc, openSession, projectGraph, ResearchG
   const h=React.createElement, {Details,Records}=components;
   return function Workbench({sessionId}) {
     const [state,setState]=React.useState(null),[error,setError]=React.useState(null),[notice,setNotice]=React.useState(null);
-    const [preview,setPreview]=React.useState(null);
+    const [preview,setPreview]=React.useState(null),[referencePreview,setReferencePreview]=React.useState(null);
     const [goal,setGoal]=React.useState(''),[busy,setBusy]=React.useState(false),[updated,setUpdated]=React.useState(null);
     const [knowledgeSearch,setKnowledgeSearch]=React.useState(''),[guidancePath,setGuidancePath]=React.useState(''),[guidanceVersion,setGuidanceVersion]=React.useState('');
     const [selected,setSelected]=React.useState(null),[edgeId,setEdgeId]=React.useState(null),[search,setSearch]=React.useState(''),[filter,setFilter]=React.useState('all');
@@ -59,12 +59,14 @@ export function createWorkbench(React, rpc, openSession, projectGraph, ResearchG
       finally{if(life===lifecycle.current){pending.current=false;setBusy(false);}}
     }
     async function navigate(id){try{await openSession(id);}catch(e){setNotice(`无法打开原生会话：${e.message}`);}}
+    async function inspectReference(ref){try{setReferencePreview(await call('reference.get',{ref}));}catch(e){setNotice(`无法读取研究材料：${e.message}`);}}
     const select=id=>{setSelected(id);setEdgeId(null);};
     const btn=(label,endpoint,payload={},off=disabled)=>h('button',{disabled:off,onClick:()=>act(endpoint,payload)},label);
     return h('div',{className:'ari-v5','aria-busy':busy},h('style',null,researchStyles),
       h('header',{className:'ari-header'},h('div',{className:'ari-overline'},'RESEARCH / 研究工作台'),h('h2',null,state?.project.goal??'关联研究项目'),
         state&&h(React.Fragment,null,h('div',{className:'ari-stats'},
           h('span',null,h('strong',null,model.nodes.length),'研究节点'),h('span',null,h('strong',null,runtime?.running_count??'未知'),'实际运行会话'),
+          h('span',null,h('strong',null,runtime?.waiting_approval_count??0),'等待审批'),
           h('span',null,h('strong',null,runtime?.specialist_count??0),'运行中专家'),
           h('span',null,h('strong',null,state.review_queue?.pending_total??'未知'),'待整理'),
           h('span',null,h('strong',null,Number(state.usage.known).toLocaleString()),'已记录 token'),h('span',null,h('strong',null,state.usage.missing??state.usage.unknown_count),'缺失请求')),
@@ -79,8 +81,14 @@ export function createWorkbench(React, rpc, openSession, projectGraph, ResearchG
             ['paused','cold'].includes(runState)&&btn('继续自主研究','resume'),
             ['running','paused','cold','stopping'].includes(runState)&&btn('停止研究','stop'),
             runState==='unverified'&&btn('重新核实停止','verify-stop')))),
+      (runtime?.approvals??[]).length>0&&h('section',{className:'ari-section','aria-label':'待审批'},h('h3',null,'等待原生审批'),
+        ...(runtime.approvals??[]).map(a=>h('article',{key:`${a.session_id}:${a.approval_id}`},
+          h('strong',null,`${a.node_id??'项目规划'} · 等待审批`),h('p',null,a.reason??'未提供原因'),
+          h('small',null,`${a.approval_id}${a.asked_at?` · 自 ${new Date(a.asked_at).toLocaleString()} 起`:''}`),
+          h('button',{onClick:()=>navigate(a.session_id)},'打开审批会话')))),
       error&&h('div',{className:'ari-alert',role:'alert'},state?'连接异常，保留最后成功数据。':'暂时无法读取项目。',` ${error}`,h('button',{onClick:refresh},'重试')),
       notice&&h('p',{role:'status'},notice),
+      referencePreview&&h('section',{className:'ari-section','aria-label':'研究材料'},h('h3',null,'研究材料'),h('pre',null,JSON.stringify(referencePreview,null,2)),h('button',{onClick:()=>setReferencePreview(null)},'关闭材料')),
       preview&&h('section',{className:'ari-section','aria-label':'接手预览'},h('h3',null,'历史文件快照 · 接手预览'),
         h('p',null,`来源：${preview.context.source_attempt_id} · 目标目录：${preview.workspace}`),
         h('pre',null,JSON.stringify(preview.context,null,2)),h('p',null,`未完整保存：${preview.missing.length} 项`),
@@ -107,7 +115,13 @@ export function createWorkbench(React, rpc, openSession, projectGraph, ResearchG
           h(Records,{group:model.planning,state,onSession:navigate,onRestore:snapshotId=>act('restore.preview',{snapshotId}),disabled})),
         h('details',{className:'ari-section',open:true},h('summary',null,`项目知识与未决问题 · ${state.knowledge.length}`),
           h('input',{'aria-label':'搜索项目知识',placeholder:'搜索主张、条件、引用…',value:knowledgeSearch,onChange:e=>setKnowledgeSearch(e.target.value)}),
-          ...knowledgeRows.map(item=>h('article',{key:item.ref},h('strong',null,`${item.ref} · ${item.kind} · ${item.status}`),h('p',{className:'ari-preserve'},typeof item.statement==='string'?item.statement:item.statement?.preview),h('p',null,`条件：${JSON.stringify(item.conditions)} · 来源：${JSON.stringify(item.evidence_refs)}`),item.supersedes?.length>0&&h('small',null,`修订自 ${item.supersedes.join('、')}`))),
+          ...knowledgeRows.map(item=>h('article',{key:item.ref},h('strong',null,`${item.ref} · ${item.kind} · ${item.status}`),
+            h('p',{className:'ari-preserve'},typeof item.statement==='string'?item.statement:item.statement?.preview),
+            h('p',null,h('strong',null,'证据引用：'),item.evidence_refs?.length?item.evidence_refs.map(ref=>h('button',{key:ref,onClick:()=>inspectReference(ref)},ref)):'未关联证据'),
+            h('p',null,h('strong',null,'记录来源：'),item.source_identity&&Object.keys(item.source_identity).length?JSON.stringify(item.source_identity):'未填写',item.source_identity?.session_id&&h('button',{onClick:()=>navigate(item.source_identity.session_id)},'打开来源会话')),
+            h('p',null,h('strong',null,'适用范围：'),item.scope&&Object.keys(item.scope).length?JSON.stringify(item.scope):'未填写'),
+            h('p',null,h('strong',null,'适用条件：'),item.conditions&&Object.keys(item.conditions).length?JSON.stringify(item.conditions):'未填写'),
+            item.supersedes?.length>0&&h('p',null,h('strong',null,'修订历史：'),...item.supersedes.map(ref=>h('button',{key:ref,onClick:()=>inspectReference(ref)},ref))))),
           !knowledgeRows.length&&h('p',{className:'ari-empty'},'没有匹配的知识条目。')),
         h('details',{className:'ari-section'},h('summary',null,`节点检查点 · ${state.checkpoints.length}`),...state.checkpoints.map(item=>h('article',{key:item.checkpoint_id},h('strong',null,`${item.node_id??'项目规划'} · revision ${item.revision}`),h('pre',null,JSON.stringify(item.state,null,2))))),
         h('details',{className:'ari-section'},h('summary',null,`整理与复核待办 · ${(state.review_todos??[]).filter(item=>item.state!=='completed').length}`),...(state.review_todos??[]).filter(item=>item.state!=='completed').map(item=>h('p',{key:item.todo_id},`${item.todo_id} · ${item.node_id??'项目规划'} · ${item.trigger_kind} · ${item.trigger_ref} · ${item.state}`))),
@@ -115,12 +129,13 @@ export function createWorkbench(React, rpc, openSession, projectGraph, ResearchG
         h('details',{className:'ari-section',open:true},h('summary',null,`项目会话 · ${sessionCards.length}`),...sessionCards.map(s=>h('article',{key:s.session_id},
           h('strong',null,`${s.detached?'历史会话':roles[s.role]} · ${s.node_id??'项目规划'}`),h('p',null,`${s.name??s.session_id} · ${s.native_status??'未加载'} · ${reasons[s.pause_reason]??s.pause_reason??'无暂停'}`),
           h('p',null,s.cwd??'目录未知'),h('button',{onClick:()=>navigate(s.session_id)},'打开会话'),
+          s.pending_approvals>0&&h('p',{role:'status'},`等待审批 · ${s.approvals?.[0]?.reason??'未提供原因'}`),
           ['human','native_stop','finished','segment_complete','complete'].includes(s.pause_reason)&&h('button',{disabled,onClick:()=>act('resume',{targetSessionId:s.session_id})},'继续此会话'),
           ['requested','unverified'].includes(s.close_state)&&h('button',{disabled,onClick:()=>act('verify-close',{targetSessionId:s.session_id})},'核实工作段收尾'),
           ['fault','host_limit','unverified'].includes(s.pause_reason)&&h('button',{disabled,onClick:()=>act('retry',{targetSessionId:s.session_id})},'核实并重试'),
           h('details',null,h('summary',null,'关联历史与原生状态'),h('pre',null,JSON.stringify({goal:s.goal,jobs:s.jobs,intervals:state.associations.filter(a=>a.session_id===s.session_id)},null,2)))))),
         h('details',{className:'ari-section'},h('summary',null,`节点内部协作 · ${(state.specialists??[]).length}`),...(state.specialists??[]).map(s=>h('article',{key:s.task_id},h('strong',null,`${s.task_id} · ${s.purpose} · ${s.state}`),h('p',null,`${s.label} · ${s.node_id??'项目规划'} · ${s.context_mode==='blind'?'盲评：仅分配材料':'研究背景'}`),s.child_session_id&&h('button',{onClick:()=>navigate(s.child_session_id)},'打开专家会话'),(['running','unverified'].includes(s.state)||!s.exit_verified)&&h('button',{disabled,onClick:()=>act('verify-specialist',{taskId:s.task_id})},'核实专家退出'),s.error&&h('p',{role:'alert'},s.error)))),
-        h('details',{className:'ari-section',open:blockedCreations.length>0},h('summary',null,'探索任务与恢复'),...(state.tasks??state.workflow?.tasks??[]).map(t=>h('article',{key:t.task_id},h('p',null,`${t.task_id} · ${t.node_id} · ${t.state}${t.error?' · '+t.error:''}`),blockedCreations.some(b=>b.task_id===t.task_id)&&h('p',null,'需要处理：创建结果待核实，保留 1 个研究槽位；未确认前不会自动重新创建。'),['failed','unverified'].includes(t.state)&&h('button',{disabled,onClick:()=>act('retry',{taskId:t.task_id})},'核实并重试创建')))),
+        h('details',{className:'ari-section',open:blockedCreations.length>0},h('summary',null,'探索任务与恢复'),...(state.tasks??state.workflow?.tasks??[]).map(t=>h('article',{key:t.task_id},h('p',null,`${t.task_id} · ${t.node_id} · ${t.state}${t.error?' · '+t.error:''}`),blockedCreations.some(b=>b.task_id===t.task_id)&&h('p',null,'需要处理：创建结果待核实，保留 1 个研究槽位；未确认前不会自动重新创建。'),t.state==='unverified'&&h('button',{disabled,onClick:()=>act('verify-task',{taskId:t.task_id})},'核实是否未启动'),['failed','unverified'].includes(t.state)&&h('button',{disabled,onClick:()=>act('retry',{taskId:t.task_id})},'核实并重试创建')))),
         h('details',{className:'ari-section'},h('summary',null,'高级设置'),
           h('p',null,'科研指导按内容版本登记，只在相关任务上下文中取用方法卡。'),
           state.guidance&&h('p',null,`当前指导：${state.guidance.path} · ${state.guidance.version} · ${state.guidance.content_hash}`),

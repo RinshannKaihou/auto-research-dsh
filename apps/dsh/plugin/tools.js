@@ -79,6 +79,11 @@ export function registerResearchTools(ctx, domain) {
       invoke: (args, exec, id) => domain.verifySpecialist(exec.agent, args.task_id, id),
     }),
     tool(domain, {
+      name: 'research_verify_task', description: 'Verify an exploration task whose native session creation is uncertain. If native absence and lack of execution facts are confirmed, settle it as failed without restarting research.',
+      parameters: { task_id: { type: 'string', required: true } },
+      invoke: (args, exec, id) => domain.verifyTask(exec.agent, args.task_id, id),
+    }),
+    tool(domain, {
       name: 'research_query',
       method: 'query',
       description: 'Read a bounded research summary, retrieve a fixed reference, search knowledge, or page a collection. Use the returned cursor to continue.',
@@ -94,7 +99,7 @@ export function registerResearchTools(ctx, domain) {
     tool(domain, {
       name: 'research_propose',
       method: 'propose',
-      description: 'Atomically propose a node as an independent root with root_reason or a derived node with typed predecessors and fixed input_refs. depends_on controls scheduling; branches_from and revises are scientific lineage only.',
+      description: 'Atomically propose a node as an independent root with root_reason or a derived node with typed predecessors and fixed input_refs. A real predecessor must be declared; a handoff error does not make the successor a root. depends_on controls scheduling; branches_from and revises are scientific lineage only.',
       parameters: {
         question: { type: 'string', required: true },
         why_now: { type: 'string', required: true },

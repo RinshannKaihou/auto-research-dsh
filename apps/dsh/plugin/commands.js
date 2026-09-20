@@ -6,7 +6,7 @@ export function registerResearchCommand(ctx, domain) {
   return ctx.commands.register({
     name: 'research',
     description: 'Manage the research project associated with this native session',
-    input: { hint: 'init|open|status|auto|pause|resume|retry|verify-close|verify-stop|stop|discuss|restore|guidance|detach …' },
+    input: { hint: 'init|open|status|auto|pause|resume|retry|verify-task|verify-close|verify-stop|stop|discuss|restore|guidance|detach …' },
     async handler(invocation) {
       const input = invocation.rawInput.trim();
       const [action = 'status', ...rest] = input.split(/\s+/);
@@ -44,6 +44,10 @@ export function registerResearchCommand(ctx, domain) {
         if (action === 'verify-specialist') {
           if (rest.length !== 1) throw new Error('Usage: /research verify-specialist <task-id>');
           return result(await domain.verifySpecialist(invocation.agent, arg, id));
+        }
+        if (action === 'verify-task') {
+          if (rest.length !== 1) throw new Error('Usage: /research verify-task <task-id>');
+          return result(await domain.verifyTask(invocation.agent, arg, id));
         }
         if (action === 'verify-close') {
           if (rest.length !== 2 || rest[0] !== '--session') throw new Error('Usage: /research verify-close --session <id>');

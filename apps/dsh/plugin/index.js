@@ -47,7 +47,7 @@ export function apply(ctx, config = {}) {
     order: 700,
     text: [
       'When this native session is associated with a research project, use research_* tools to preserve durable research structure.',
-      'Main coordinates and dispatches; node_core owns full experiments. Specialists are read-only. Publications may be partial and do not imply scientific validation. Only node_core finishes work segments. Never edit .research or issue SQL repairs; use research_verify_specialist.',
+      'Main coordinates and dispatches; node_core owns full experiments. Specialists are read-only. Publications may be partial and do not imply scientific validation. Only node_core finishes work segments. A successor must declare its actual predecessors and inputs; report a failed handoff instead of declaring a false root. Never edit .research or issue SQL repairs; use research_verify_specialist or research_verify_task.',
       'Do not start autonomous research unless the user enabled it through /research auto.',
       'In manual mode, start a consolidation reviewer only when the user explicitly asks for consolidation or review.',
     ].join('\n'),
@@ -98,6 +98,7 @@ export function apply(ctx, config = {}) {
         }
         if (endpoint === 'resume') return { ok: true, value: await domain.resumeSession(agent, payload.targetSessionId, id) };
         if (endpoint === 'retry') return { ok: true, value: payload.taskId ? await domain.retryTask(agent, payload.taskId, id) : await domain.resumeSession(agent, payload.targetSessionId, id, { retry: true }) };
+        if (endpoint === 'verify-task') return { ok: true, value: await domain.verifyTask(agent, payload.taskId, id) };
         if (endpoint === 'verify-close') return { ok: true, value: await domain.verifyClose(agent, payload.targetSessionId, id) };
         if (endpoint === 'verify-specialist') return { ok: true, value: await domain.verifySpecialist(agent, payload.taskId, id) };
         if (endpoint === 'verify-stop') return { ok: true, value: await domain.verifyStop(agent, id) };

@@ -105,30 +105,74 @@ export class ResearchDomain {
   }
   async query(agent) {
     const state = await this.state(agent, { all: false });
+    const approvalRecords = new Map();
+    for (const notice of state.workflow.notifications ?? []) {
+      const payload = notice.payload ?? {};
+      if (!['approval/asked','approval/decided'].includes(payload.event_type) || !payload.approval_id) continue;
+      const key = `${payload.session_id}:${payload.approval_id}`;
+      if (payload.event_type === 'approval/asked') approvalRecords.set(key, {
+        approval_id: payload.approval_id, call_id: payload.call_id ?? null,
+        reason: payload.reason ?? '未提供原因', session_id: payload.session_id,
+        node_id: payload.node_id ?? null, asked_at: notice.created_at,
+      });
+      else approvalRecords.delete(key);
+    }
     const sessions = state.workflow.sessions.map(row => {
       const target = this.ctx.agents.get(row.session_id);
       const goal = target ? this.ctx.goals.get(target) : null;
       let jobs = null;
       try { if (target) jobs = this.nativeJobs(target); } catch {}
+      if (target) {
+        for (const e of target.session.events ?? []) {
+          const approvalId = e.data?.id;
+          if (!approvalId) continue;
+          const key = `${row.session_id}:${approvalId}`;
+          if (e.type === 'approval/asked') approvalRecords.set(key, {
+            approval_id: approvalId, call_id: e.data?.callId ?? null,
+            reason: e.data?.reason ?? '未提供原因', session_id: row.session_id,
+            node_id: row.node_id ?? null, asked_at: e.at ?? e.timestamp ?? null,
+          });
+          if (e.type === 'approval/decided') approvalRecords.delete(key);
+        }
+      }
+      const approvals = [...approvalRecords.values()].filter(item => item.session_id === row.session_id);
       return { ...row, context: undefined, name: target?.session.header.title ?? row.session_id,
         native_status: target?.status ?? 'unloaded', goal,
-        pending_approvals: target ? (() => {
-          const pending = new Set();
-          for (const e of target.session.events ?? []) {
-            if (e.type === 'approval/asked') pending.add(e.data.id);
-            if (e.type === 'approval/decided') pending.delete(e.data.id);
-          }
-          return pending.size;
-        })() : null,
+        pending_approvals: approvals.length, approvals,
         jobs, pause_reason: this.faults.get(row.session_id) ?? row.pause_reason,
         turn: this.turns.get(row.session_id) ?? null };
     });
+    const approvals = [...approvalRecords.values()];
     state.runtime = { ...state.workflow.run, sessions,
-      running_count: sessions.filter(s => managed(s) && s.native_status === 'running').length,
+      running_count: sessions.filter(s => managed(s) && s.native_status === 'running' && !s.pending_approvals).length,
+      waiting_approval_count: sessions.filter(s => managed(s) && s.pending_approvals > 0).length,
       specialist_count: sessions.filter(s => s.role === 'specialist' && s.native_status === 'running').length,
-      pending_approvals: sessions.some(s => managed(s) && s.pending_approvals === null) ? null : sessions.filter(managed).reduce((n,s) => n+s.pending_approvals,0),
+      pending_approvals: approvals.length, approvals,
       current: sessions.find(s => s.session_id === agent.id) };
     return state;
+  }
+  async recordApproval(agent, event) {
+    const approvalId = event?.data?.id;
+    if (!approvalId || !['approval/asked','approval/decided'].includes(event.type)) return;
+    try {
+      const state = await this.state(agent, { all: false });
+      const row = state.workflow.session;
+      if (!managed(row)) return;
+      await this.workflow(agent, 'notify', {
+        key: `approval:${approvalId}:${event.type}`,
+        kind: event.type === 'approval/asked' ? 'approval_requested' : 'approval_decided',
+        silent: true,
+        event_type: event.type,
+        approval_id: approvalId,
+        call_id: event.data?.callId ?? null,
+        reason: event.data?.reason ?? null,
+        outcome: event.data?.outcome ?? null,
+        session_id: agent.id,
+        node_id: row.node_id ?? null,
+      }, `${agent.id}:approval:${approvalId}:${event.type}`);
+    } catch (error) {
+      if (!/not associated|not currently attached/i.test(error instanceof Error ? error.message : String(error))) throw error;
+    }
   }
   page(agent, collection, cursor = {}, limit = 50) {
     if (collection === 'usage') return this.request(agent, 'usage_page', { ...cursor, limit });
@@ -372,6 +416,37 @@ export class ResearchDomain {
       return result;
     });
   }
+  async verifyTask(agent, taskId, id = operationId(agent)) {
+    return this.serial(agent, async () => {
+      const prior = await this.request(agent, 'recovery_receipt', { key: id });
+      if (prior) return prior;
+      const state = await this.state(agent);
+      const selected = await this.lookup(agent, { ref: taskId });
+      if (selected.kind !== 'exploration-task') throw new Error('不是探索任务');
+      const task = selected.value;
+      if (agent.id !== task.parent_session_id && state.workflow.session?.role !== 'main') {
+        throw new Error('只有任务发起者或研究主协调可以核实探索任务');
+      }
+      if (task.state === 'failed') return { ...task, message: '任务已经结算为失败；未重复写入恢复事件' };
+      if (task.state !== 'unverified') throw new Error('任务不处于待核实状态');
+      if (!this.adapter.exists) throw new Error('宿主不提供会话存在性核实');
+      const clean = await this.request(agent, 'task_creation_clear', { task_id: taskId });
+      if (!clean.clear) return { ...task, recovery: '已有执行登记；任务保持待核实' };
+      if (await this.adapter.exists(task.session_id)) {
+        const child = await this.adapter.resolve(task.session_id);
+        const events = child.session.events ?? [];
+        if (!this.quiet(child) || this.ctx.goals.get(child) || events.some(e => e.type === 'tool/call' || e.type === 'agent/start')) {
+          return { ...task, recovery: '原生会话存在执行事实；任务保持待核实' };
+        }
+        return { ...task, recovery: '原生会话存在但执行事实不足；任务保持待核实' };
+      }
+      await this.workflow(agent, 'task_verified_failed', { task_id: taskId }, `${id}:failed`);
+      const result = { ...(await this.lookup(agent, { ref: taskId })).value,
+        message: '已核实不存在原生会话或执行登记；任务结算为失败，原错误已保留' };
+      await this.workflow(agent, 'intent', { intent_id: id, kind: 'recovery-receipt', state: 'complete', details: result }, `${id}:result`);
+      return result;
+    });
+  }
   async verifySpecialist(agent, taskId, id = operationId(agent)) {
     return this.serial(agent, async () => {
       const task = await this.request(agent, 'specialist_get', { task_id: taskId });
@@ -465,6 +540,7 @@ export class ResearchDomain {
   }
   async dispatch(agent, nodeId, id) {
     return this.serial(agent, async () => {
+      await this.request(agent, 'validate_branch_inputs', { node_id: nodeId });
       const task = await this.workflow(agent, 'task', { node_id: nodeId }, id);
       await this.schedule(agent);
       // Terminal tasks leave the control view, but their retry receipts remain valid.
@@ -572,6 +648,15 @@ export class ResearchDomain {
     for (const task of state.workflow.tasks.filter(t => t.state === 'queued')) {
       if (slots >= this.autonomousConcurrency) break;
       const parent = await this.adapter.resolve(task.parent_session_id);
+      let prepared = null;
+      if (!task.cwd) {
+        try {
+          prepared = await this.request(parent, 'prepare_branch', { node_id: task.node_id }, `${task.task_id}:prepare`);
+        } catch (error) {
+          await this.workflow(agent, 'task_state', { task_id: task.task_id, state: 'failed', error: error.message }, `${task.task_id}:${task.updated_at}:prepare-failed`);
+          continue;
+        }
+      }
       await this.workflow(agent, 'task_state', { task_id: task.task_id, state: 'starting' }, `${task.task_id}:${task.updated_at}:starting`);
       try {
         let child, workspace;
@@ -583,7 +668,6 @@ export class ResearchDomain {
             throw new Error('Persistent node core is not quiet in its recorded workspace');
           }
         } else {
-          const prepared = await this.request(parent, 'prepare_branch', { node_id: task.node_id }, `${task.task_id}:prepare`);
           workspace = prepared.workspace;
           child = await this.createSession(parent, task.session_id, workspace);
           const context = await this.request(parent, 'task_context', { task_id: task.task_id });

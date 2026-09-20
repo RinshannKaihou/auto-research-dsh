@@ -32,6 +32,7 @@ export function createResearchDetails(React) {
     if(!node) return h('aside',{className:'ari-details ari-detail-empty'},h('h3',null,'选择一个研究节点'),h('p',null,'查看计划、固定输入、阶段材料和全部工作段。选中节点不会启动研究。'));
     return h('aside',{className:'ari-details','aria-label':'节点详情'},h('button',{onClick:onClose},'关闭详情'),
       h('small',null,`${node.node_id} · ${node.status} · ${node.strategy??'continue'}`),h('h3',null,node.question),
+      node.lineage_corrected&&h('p',{role:'status'},'谱系已补录／原始声明为根节点'),
       h('div',{className:'ari-actions'},h('button',{disabled,onClick:()=>act('discussion.open',{nodeId:node.node_id})},'围绕此节点讨论'),h('details',null,h('summary',null,'更多'),h('button',{disabled,onClick:()=>act('discussion.open',{nodeId:node.node_id,fresh:true})},'新建另一场讨论'))),
       section('议程锚',h('p',null,node.question_ref??'旧节点尚无可确认的问题版本')),
       section('提出理由',h('p',{className:'ari-preserve'},node.why_now||'未记录')),

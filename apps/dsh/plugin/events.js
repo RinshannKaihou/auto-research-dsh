@@ -188,7 +188,14 @@ export function registerResearchEvents(ctx, domain) {
   }));
   disposers.push(ctx.on('session/event', (session,event) => {
     const agent = ctx.agents.get(session.id);
-    if (agent?.session === session) enqueue(agent,event);
+    if (agent?.session === session) {
+      enqueue(agent,event);
+      if (event.type === 'approval/asked' || event.type === 'approval/decided') {
+        void domain.recordApproval(agent,event).catch(error => {
+          if (/disconnected|unavailable|channel closed/i.test(error.message)) contain(agent,Promise.reject(error));
+        });
+      }
+    }
   }));
   disposers.push(ctx.on('llm/stream', function observe(options,next) {
     const sourceKey = `llm:${options.sessionId ?? 'aux'}:${randomUUID()}`;

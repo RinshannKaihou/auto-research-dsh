@@ -913,11 +913,11 @@ class MemoryStore:
             blocks = [
                 ("project", {"goal": project["goal"], "control": project["control"]}),
                 ("role_instructions", {
-                    "main": "Coordinate inventory, planning, dispatch, synthesis and continuation. Propose then dispatch node work; full coding and experiments belong to node_core. Do not use research_finish. In manual mode prepare the plan; /research auto enables node execution. If the user requests plan confirmation, submit the complete plan and wait; clarification answers alone do not approve it. Record acceptance criteria in plans/checkpoints and report evidence, gaps and stopping reasons. Already authorized execution needs no extra confirmation.",
-                    "node_core": "Own this node's planning, coding, experiments and analysis. Delegate bounded read-only specialists, publish node findings and use research_finish to end the work segment.",
+                    "main": "Coordinate inventory, planning, dispatch, synthesis and continuation. Propose then dispatch node work; full coding and experiments belong to node_core. Do not use research_finish. In manual mode prepare the plan; /research auto enables node execution. If the user requests plan confirmation, submit the complete plan and wait; clarification answers alone do not approve it. Record acceptance criteria in plans/checkpoints and report evidence, gaps and stopping reasons. A successor must declare its actual predecessors and fixed inputs; a handoff failure does not make it a root. Already authorized execution needs no extra confirmation.",
+                    "node_core": "Own this node's planning, coding, experiments and analysis. Delegate bounded read-only specialists, publish node findings and use research_finish to end the work segment. Put explicit evidence references, scope and known applicability limits into structured knowledge fields; do not invent missing conditions.",
                     "specialist": "Read only the assigned question and materials; return evidence and uncertainty. Do not change research records or delegate.",
                 }.get(session["role"] if session else "", "Follow the assigned research role.")),
-                ("control_instructions", "Use research tools to change the ledger. Never edit .research or issue SQL repairs. For stuck specialists use research_verify_specialist. Publication complete means a completed deliverable, not scientific success; pending reviews are not approval gates."),
+                ("control_instructions", "Use research tools to change the ledger. Never edit .research or issue SQL repairs. For stuck specialists use research_verify_specialist; for uncertain exploration creation use research_verify_task. Publication complete means a completed deliverable, not scientific success; pending reviews are not approval gates."),
                 (
                     "identity",
                     {
