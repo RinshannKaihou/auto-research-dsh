@@ -153,6 +153,55 @@ def tokenize(text: str) -> tuple[str, str, str]:
     return " ".join(bigrams), " ".join(chars), " ".join(terms)
 
 
+# Explicit column list. The historical statements were positional with
+# thirteen placeholders, so schema 7's added ``motivated_by`` column broke
+# them silently at write time; never reintroduce ``VALUES(?,?,...)`` here.
+_REVISION_COLUMNS = (
+    "knowledge_id,revision,statement,scope,conditions,status,evidence_refs,"
+    "source_identity,dependencies,supersedes,author,created_at,source_sequence"
+)
+_REVISION_INSERT = (
+    f"INSERT INTO knowledge_revisions ({_REVISION_COLUMNS},motivated_by)"
+    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+)
+_REVISION_INSERT_IGNORE = (
+    f"INSERT OR IGNORE INTO knowledge_revisions ({_REVISION_COLUMNS})"
+    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)"
+)
+
+
+def write_support_edge(
+    db: sqlite3.Connection,
+    user_ref: str,
+    used_ref: str,
+    flags: dict,
+    created_at: str,
+    sequence: int,
+) -> None:
+    """Insert or merge one edge.
+
+    Must not be ``INSERT OR IGNORE``: the same pair of versions can be linked
+    through ``dependencies`` and ``evidence_refs`` at once, and ignoring the
+    second write would drop a source label that rule R2 requires be kept.
+    """
+    db.execute(
+        "INSERT INTO knowledge_support_edges"
+        " (user_ref,used_ref,from_dependencies,from_evidence,created_at,source_sequence)"
+        " VALUES (?,?,?,?,?,?)"
+        " ON CONFLICT(user_ref,used_ref) DO UPDATE SET"
+        "  from_dependencies=MAX(from_dependencies,excluded.from_dependencies),"
+        "  from_evidence=MAX(from_evidence,excluded.from_evidence)",
+        (
+            user_ref,
+            used_ref,
+            flags["from_dependencies"],
+            flags["from_evidence"],
+            created_at,
+            sequence,
+        ),
+    )
+
+
 def _knowledge_ref(knowledge_id: str, revision: int) -> str:
     return f"knowledge/{knowledge_id}@{revision}"
 
@@ -162,6 +211,47 @@ def parse_knowledge_ref(value: str) -> tuple[str, int]:
     if not match:
         raise ValidationError(f"Invalid knowledge reference: {value}")
     return match.group(1), int(match.group(2))
+
+
+def is_knowledge_ref(value: Any) -> bool:
+    return isinstance(value, str) and bool(
+        re.fullmatch(r"knowledge/([A-Za-z0-9_-]+)@(\d+)", value)
+    )
+
+
+def support_refs(dependencies: Any, evidence_refs: Any) -> dict[str, dict]:
+    """The unified knowledge propagation basis of rule R2.
+
+    ``dedup(K-typed dependencies ∪ K-typed evidence_refs)``, each entry
+    carrying which field produced it. Propagation, impact queries and the
+    publication check all consume this one view; reading ``dependencies``
+    alone is the single most likely implementation error, because clearing
+    that field does not detach a version whose ``evidence_refs`` still cites
+    the same knowledge version.
+
+    References to frozen material (snapshots, publication items) are terminal
+    and never appear here.
+    """
+
+    def listed(value: Any) -> list:
+        if isinstance(value, str):
+            try:
+                value = json.loads(value or "[]")
+            except json.JSONDecodeError:
+                return []
+        return value if isinstance(value, list) else []
+
+    edges: dict[str, dict] = {}
+    for field, refs in (
+        ("from_dependencies", listed(dependencies)),
+        ("from_evidence", listed(evidence_refs)),
+    ):
+        for ref in refs:
+            if not is_knowledge_ref(ref):
+                continue
+            flags = edges.setdefault(ref, {"from_dependencies": 0, "from_evidence": 0})
+            flags[field] = 1
+    return edges
 
 
 def _execute_schema(db: sqlite3.Connection, schema: str = MEMORY_SCHEMA) -> None:
@@ -206,7 +296,7 @@ def migrate_schema4(path: Path) -> None:
                     (kid, "open_question", node["node_id"], created),
                 )
                 db.execute(
-                    "INSERT OR IGNORE INTO knowledge_revisions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    _REVISION_INSERT_IGNORE,
                     (
                         kid,
                         1,
@@ -236,6 +326,13 @@ def migrate_schema4(path: Path) -> None:
         except BaseException:
             db.rollback()
             raise
+
+
+def _epistemic():
+    """Imported lazily: :mod:`epistemic` depends on this module's helpers."""
+    from . import epistemic
+
+    return epistemic
 
 
 class MemoryStore:
@@ -271,6 +368,8 @@ class MemoryStore:
             "supersedes",
         ):
             value[key] = json.loads(value[key])
+        # Added by schema 7; decode it too or it leaks as a raw JSON string.
+        value["motivated_by"] = json.loads(value.get("motivated_by") or "[]")
         value["ref"] = _knowledge_ref(value["knowledge_id"], value["revision"])
         return value
 
@@ -338,6 +437,41 @@ class MemoryStore:
         except sqlite3.OperationalError:
             pass
 
+    def _write_relations_in_tx(
+        self, db: sqlite3.Connection, version_ref: str, relations: list, created_at: str
+    ) -> list:
+        epistemic = _epistemic()
+        checked = epistemic.normalise_relations(relations, version_ref)
+        return epistemic.write_declared_relations(
+            db,
+            version_ref=version_ref,
+            relations=checked,
+            operation_id=created_at,
+            created_at=created_at,
+            next_id=self._next,
+        )
+
+    @staticmethod
+    def sync_support_edges(db: sqlite3.Connection, value: dict) -> None:
+        """Materialise rule R2's basis view for one freshly written version.
+
+        Edges belong to the version that declared them, so a revision only
+        adds its own rows; earlier versions keep theirs and stay traceable
+        (R3). ``motivated_by`` is deliberately not consulted: heuristic links
+        do not propagate (R4).
+        """
+        for used_ref, flags in support_refs(
+            value.get("dependencies"), value.get("evidence_refs")
+        ).items():
+            write_support_edge(
+                db,
+                value["ref"],
+                used_ref,
+                flags,
+                value["created_at"],
+                int(value.get("source_sequence") or 0),
+            )
+
     @staticmethod
     def queue_review_in_tx(
         db: sqlite3.Connection, trigger_kind: str, trigger_ref: str, node_id: str | None
@@ -361,6 +495,16 @@ class MemoryStore:
         statement = _require_text(fields.get("statement"), "statement")
         evidence = _json_value(fields.get("evidence_refs"), "evidence_refs", [])
         dependencies = _json_value(fields.get("dependencies"), "dependencies", [])
+        for parameter in ("affected_scope_mode", "affected_scope", "change_kind"):
+            if fields.get(parameter):
+                # Change-event parameters belong to a revision. Accepting them
+                # here would silently drop a declaration the caller believed
+                # they had made (A0_SCHEMA.md §7.1).
+                raise ValidationError(f"{parameter} applies to revise, not record")
+        relations = _epistemic().normalise_relations(fields.get("relations"))
+        for target in _epistemic().grounded_targets(relations):
+            if target not in dependencies:
+                dependencies.append(target)
         if not isinstance(evidence, list) or not all(isinstance(x, str) for x in evidence):
             raise ValidationError("evidence_refs must be strings")
         if not isinstance(dependencies, list) or not all(isinstance(x, str) for x in dependencies):
@@ -376,6 +520,8 @@ class MemoryStore:
             "evidence_refs": evidence,
             "source_identity": _json_value(fields.get("source_identity"), "source_identity", {}),
             "dependencies": dependencies,
+            "motivated_by": _json_value(fields.get("motivated_by"), "motivated_by", []),
+            "relations": relations,
             "supersedes": [],
             "author": _require_text(fields.get("author", "research-agent"), "author"),
             "node_id": fields.get("node_id"),
@@ -417,13 +563,16 @@ class MemoryStore:
         dependencies = payload.get("dependencies", [])
         self._validate_evidence(db, evidence)
         self._validate_evidence(db, dependencies)
+        # Heuristic links must resolve too, but they never become support
+        # edges: a motivation does not propagate invalidation (R4).
+        self._validate_evidence(db, payload.get("motivated_by", []))
         kid = self._next(db, "knowledge", "K")
         at = _now()
         db.execute(
             "INSERT INTO knowledge_entries VALUES(?,?,?,?)", (kid, payload["kind"], node_id, at),
         )
         db.execute(
-            "INSERT INTO knowledge_revisions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            _REVISION_INSERT,
             (
                 kid,
                 1,
@@ -442,10 +591,16 @@ class MemoryStore:
                 else int(
                     db.execute("SELECT COALESCE(MAX(event_id),0)+1 FROM events").fetchone()[0]
                 ),
+                _encoded(payload.get("motivated_by", [])),
             ),
         )
         value = self._decode_knowledge(self._latest_revision(db, kid))
         self._index_knowledge(db, value)
+        self.sync_support_edges(db, value)
+        self._write_relations_in_tx(db, value["ref"], payload.get("relations", []), at)
+        _epistemic().late_reference_impacts(
+            db, value["ref"], value["created_at"], int(value.get("source_sequence") or 0)
+        )
         self._event(db, "knowledge.recorded", {"ref": value["ref"], "node_id": node_id})
         return value
 
@@ -459,6 +614,10 @@ class MemoryStore:
             "changes": _json_value(fields.get("changes"), "changes", {}),
             "reason": _require_text(fields.get("reason"), "reason"),
             "source_identity": _json_value(fields.get("source_identity"), "source_identity", {}),
+            "relations": _epistemic().normalise_relations(fields.get("relations")),
+            "affected_scope_mode": fields.get("affected_scope_mode"),
+            "affected_scope": _json_value(fields.get("affected_scope"), "affected_scope", []),
+            "change_kind": fields.get("change_kind"),
         }
 
         def work(db: sqlite3.Connection) -> dict:
@@ -475,6 +634,7 @@ class MemoryStore:
                 "status",
                 "evidence_refs",
                 "dependencies",
+                "motivated_by",
                 "author",
             }
             if not isinstance(changes, dict) or set(changes) - allowed:
@@ -485,7 +645,13 @@ class MemoryStore:
             value["statement"] = _require_text(value["statement"], "statement")
             for key in ("scope", "conditions"):
                 value[key] = _json_value(value[key], key, {})
-            for key in ("evidence_refs", "dependencies"):
+            for target in _epistemic().grounded_targets(payload["relations"]):
+                listed = value.get("dependencies") or []
+                if not isinstance(listed, list):
+                    listed = []
+                if target not in listed:
+                    value["dependencies"] = [*listed, target]
+            for key in ("evidence_refs", "dependencies", "motivated_by"):
                 value[key] = _json_value(value[key], key, [])
                 if not isinstance(value[key], list) or not all(
                     isinstance(x, str) for x in value[key]
@@ -496,7 +662,7 @@ class MemoryStore:
             at = _now()
             supersedes = [current["ref"]]
             db.execute(
-                "INSERT INTO knowledge_revisions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                _REVISION_INSERT,
                 (
                     kid,
                     revision,
@@ -511,19 +677,231 @@ class MemoryStore:
                     value.get("author", current["author"]),
                     at,
                     int(db.execute("SELECT COALESCE(MAX(event_id),0)+1 FROM events").fetchone()[0]),
+                    _encoded(value["motivated_by"]),
                 ),
             )
             fresh = self._decode_knowledge(self._latest_revision(db, kid))
             self._index_knowledge(db, fresh)
+            self.sync_support_edges(db, fresh)
+            self._write_relations_in_tx(db, fresh["ref"], payload["relations"], at)
+            mode, resolved_scope, change_kind = _epistemic().validate_change(
+                mode=payload["affected_scope_mode"],
+                scope=payload["affected_scope"],
+                kind=payload["change_kind"],
+                knowledge_id=kid,
+                new_revision=revision,
+                retracts=(
+                    value["status"] == "retracted" and current["status"] != "retracted"
+                ),
+            )
+            sequence = int(fresh.get("source_sequence") or 0)
+            change = _epistemic().apply_change(
+                db,
+                change_id=self._next(db, "knowledge_changes", "CH"),
+                knowledge_id=kid,
+                new_revision=revision,
+                kind=change_kind,
+                mode=mode,
+                scope=resolved_scope,
+                reason=payload["reason"],
+                operation_id=request_id,
+                created_at=at,
+                sequence=sequence,
+            )
+            # A revision may itself cite a version that an earlier change
+            # already invalidated; that is a late reference, not a new change.
+            _epistemic().late_reference_impacts(db, fresh["ref"], at, sequence)
             self._event(
                 db,
                 "knowledge.revised",
-                {"ref": fresh["ref"], "supersedes": current["ref"], "reason": payload["reason"]},
+                {
+                    "ref": fresh["ref"],
+                    "supersedes": current["ref"],
+                    "reason": payload["reason"],
+                    "change_id": change["change_id"],
+                },
             )
             self.queue_review_in_tx(db, "knowledge-revision", fresh["ref"], fresh["node_id"])
+            fresh["change"] = change
             return fresh
 
         return self._mutate("knowledge.revise", payload, request_id, work)
+
+    def dispose_impact(self, fields: dict, request_id: str) -> dict:
+        """Record an explicit disposition for one impact (R21)."""
+        payload = {
+            "change_id": _require_text(fields.get("change_id"), "change_id"),
+            "affected_version": _require_text(fields.get("affected_version"), "affected_version"),
+            "kind": _require_text(fields.get("disposition_kind"), "disposition_kind"),
+            "reason": _require_text(fields.get("reason"), "reason"),
+            "evidence_refs": _json_value(fields.get("evidence_refs"), "evidence_refs", []),
+            "replacement_ref": fields.get("replacement_ref"),
+            "author": fields.get("author", "research-agent"),
+        }
+        parse_knowledge_ref(payload["affected_version"])
+
+        def work(db: sqlite3.Connection) -> dict:
+            self._validate_evidence(db, payload["evidence_refs"])
+            if payload["replacement_ref"]:
+                self._validate_evidence(db, [payload["replacement_ref"]])
+            at = _now()
+            value = _epistemic().write_disposition(
+                db,
+                disposition_id=self._next(db, "knowledge_dispositions", "DP"),
+                change_id=payload["change_id"],
+                affected_version=payload["affected_version"],
+                kind=payload["kind"],
+                reason=payload["reason"],
+                evidence_refs=payload["evidence_refs"],
+                replacement_ref=payload["replacement_ref"],
+                author=payload["author"],
+                operation_id=request_id,
+                created_at=at,
+                sequence=_epistemic().next_sequence(db),
+            )
+            self._event(db, "knowledge.disposed", value)
+            return value
+
+        return self._mutate("knowledge.dispose", payload, request_id, work)
+
+    def impact_review_state(
+        self, change_id: str, affected_version: str, state: str, request_id: str
+    ) -> dict:
+        """Review progress only. It never records a disposition and never
+        clears a risk: a returned proposal means materials are ready (R24)."""
+        if state not in {"pending", "running", "proposal_ready"}:
+            raise ValidationError("Invalid impact review state")
+        payload = {
+            "change_id": change_id,
+            "affected_version": affected_version,
+            "state": state,
+        }
+
+        def work(db: sqlite3.Connection) -> dict:
+            updated = db.execute(
+                "UPDATE knowledge_impacts SET review_state=?"
+                " WHERE change_id=? AND affected_version=?",
+                (state, change_id, affected_version),
+            ).rowcount
+            if not updated:
+                raise NotFoundError(f"Unknown impact: {change_id} {affected_version}")
+            return dict(payload)
+
+        return self._mutate("knowledge.impact_review", payload, request_id, work)
+
+    def impact_next(self, node_id: str | None = None) -> dict | None:
+        """Oldest valid, undisposed impact, optionally for one node.
+
+        This replaces ``review_todos`` as consolidation's source: that table is
+        keyed by the triggering revision and cannot address a
+        ``(change_id, affected_version)`` pair at all.
+        """
+        with self._read() as db:
+            epistemic = _epistemic()
+            rows = epistemic.valid_impacts(db)
+            for row in sorted(rows, key=lambda item: (item["detected_sequence"], item["impact_id"])):
+                disposition = epistemic.current_disposition(
+                    db, row["change_id"], row["affected_version"]
+                )
+                if (disposition["kind"] if disposition else None) not in (None, "unresolved"):
+                    continue
+                if row["review_state"] != "pending":
+                    # A proposal already prepared waits for its owner to
+                    # dispose of it; handing it out again starves everything
+                    # behind it (R24, 2026-09-21).
+                    continue
+                if node_id is not None:
+                    knowledge_id, _revision = parse_knowledge_ref(row["affected_version"])
+                    owner = db.execute(
+                        "SELECT node_id FROM knowledge_entries WHERE knowledge_id=?",
+                        (knowledge_id,),
+                    ).fetchone()
+                    if not owner or owner[0] != node_id:
+                        continue
+                return dict(row)
+            return None
+
+    def knowledge_risk(self, versions: list[str], bound: int | None = None) -> dict:
+        """The two predicates plus the separately displayed version notices."""
+        with self._read() as db:
+            epistemic = _epistemic()
+            anchors = epistemic.anchor_set(db)
+            limit = bound if bound is not None else epistemic.read_bound(db)
+            return {
+                "sequence_bound": limit,
+                "versions": {
+                    version: {
+                        "needs_action": epistemic.needs_action(db, version, limit),
+                        "residual_use_risk": epistemic.residual_use_risk(db, version, limit),
+                        "version_notices": epistemic.version_notices(db, version, limit),
+                        **epistemic.in_use(db, version, anchors=anchors),
+                    }
+                    for version in versions
+                },
+            }
+
+    def narrow_impact_scope(self, fields: dict, request_id: str) -> dict:
+        """Append an auditable narrowing of an unknown scope (R9)."""
+        payload = {
+            "change_id": _require_text(fields.get("change_id"), "change_id"),
+            "affected_scope": _json_value(fields.get("affected_scope"), "affected_scope", []),
+            "reason": _require_text(fields.get("reason"), "reason"),
+        }
+
+        def work(db: sqlite3.Connection) -> dict:
+            epistemic = _epistemic()
+            value = epistemic.narrow_scope(
+                db,
+                scope_revision_id=self._next(db, "knowledge_scope_revisions", "SR"),
+                change_id=payload["change_id"],
+                scope=payload["affected_scope"],
+                reason=payload["reason"],
+                operation_id=request_id,
+                created_at=_now(),
+                sequence=epistemic.next_sequence(db),
+            )
+            self._event(db, "knowledge.scope_narrowed", value)
+            return value
+
+        return self._mutate("knowledge.narrow_scope", payload, request_id, work)
+
+    def knowledge_impacts(
+        self,
+        *,
+        version: str | None = None,
+        change_id: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+        bound: int | None = None,
+    ) -> dict:
+        with self._read() as db:
+            return _epistemic().impact_query(
+                db,
+                version=version,
+                change_id=change_id,
+                limit=limit,
+                offset=offset,
+                bound=bound,
+            )
+
+    def publication_check(self, publication_id: str, bound: int | None = None) -> dict:
+        """Re-run the check, or replay a stored one by passing its bound."""
+        with self._read() as db:
+            return _epistemic().publication_check(db, publication_id, bound)
+
+    def stored_publication_check(self, publication_id: str) -> dict | None:
+        with self._read() as db:
+            row = db.execute(
+                "SELECT * FROM publication_checks WHERE publication_id=?"
+                " ORDER BY sequence_bound DESC LIMIT 1",
+                (publication_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            value = dict(row)
+            value["check_scope"] = json.loads(value["check_scope"])
+            value["result"] = json.loads(value["result"])
+            return value
 
     def checkpoint(self, fields: dict, request_id: str) -> dict:
         node_id = fields.get("node_id")
@@ -594,7 +972,10 @@ class MemoryStore:
             return dict(row) if row else None
 
     def review_todo_state(self, todo_id: str, state: str, request_id: str) -> dict:
-        if state not in {"pending", "running", "completed"}:
+        # ``proposal_ready`` is additive (R24): consolidation now parks a todo
+        # there instead of closing it, and ``review_todo_next`` still selects
+        # only ``pending``, so the queue does not loop.
+        if state not in {"pending", "running", "proposal_ready", "completed"}:
             raise ValidationError("Invalid review todo state")
         payload = {"todo_id": _require_text(todo_id, "todo_id"), "state": state}
 
@@ -762,6 +1143,100 @@ class MemoryStore:
                 "claim_owner": session_id if any(row["state"] == "running" for row in review_rows) else None,
                 "items": [dict(row) for row in review_rows],
             }
+            # The coordinator reads the same semantics the workbench and the
+            # publication check do. Risks and version notices stay in separate
+            # fields: a newer revision existing is a pointer, not a verdict.
+            epistemic = _epistemic()
+            # Select first, page second. Taking a page and then dropping the
+            # settled rows reports a total nobody can reach: once the first
+            # eight are disposed of, everything behind them disappears from the
+            # default view (R18 supplement, CE-12v).
+            bound = epistemic.read_bound(db)
+            anchors = epistemic.anchor_set(db)
+            def still_open(row: sqlite3.Row) -> bool:
+                disposition = epistemic.current_disposition(
+                    db, row["change_id"], row["affected_version"], bound
+                )
+                return (disposition["kind"] if disposition else None) in (None, "unresolved")
+
+            open_rows = [row for row in epistemic.valid_impacts(db, bound) if still_open(row)]
+            open_rows.sort(key=lambda row: (row["detected_sequence"], row["impact_id"]))
+            affected_items = []
+            for row in open_rows[:8]:
+                version = row["affected_version"]
+                roots = epistemic.change_roots(db, row["change_id"], bound)
+                affected_items.append(
+                    {
+                        "change_id": row["change_id"],
+                        "affected_version": version,
+                        "hop": row["hop"],
+                        "edge_source": row["edge_source"],
+                        "review_state": row["review_state"],
+                        "scope_unconfirmed": epistemic.effective_scope(
+                            db, row["change_id"], bound
+                        )["mode"]
+                        == "unknown",
+                        "uncovered_refs": epistemic.uncovered_refs(db, version),
+                        "explanation": epistemic.explain_path(db, version, roots),
+                        "in_use": epistemic.in_use(db, version, anchors=anchors)["in_use"],
+                        "residual_use_risk": epistemic.residual_use_risk(db, version, bound),
+                        "version_notices": epistemic.version_notices(db, version, bound),
+                    }
+                )
+            affected_knowledge = {
+                "total": len(open_rows),
+                "shown_count": len(affected_items),
+                "not_in_use_count": sum(
+                    1 for item in affected_items if item["in_use"] is False
+                ),
+                "sequence_bound": bound,
+                # On the whole open set, not on the eight shown: a ninth
+                # pending row does not make the set undetermined (CE-12v-2).
+                "targets_complete": epistemic.targets_are_complete(db, open_rows, bound),
+                "targets_truncated": len(open_rows) > len(affected_items),
+                "paths_truncated": any(
+                    epistemic.has_alternate_path(
+                        db,
+                        item["affected_version"],
+                        epistemic.change_roots(db, item["change_id"], bound),
+                    )
+                    for item in affected_items
+                ),
+                "items": affected_items,
+            }
+            # A version can carry RR1 with no impact row at all: nothing put it
+            # in a scope, it simply cites a retracted version (CE-10b). A citer
+            # that has itself been retracted is not an action item -- retraction
+            # appends a revision inheriting the old references, so listing it
+            # would ask the reader to fix something already withdrawn (CE-10b-2).
+            retracted_rows = db.execute(
+                "SELECT DISTINCT e.user_ref, e.used_ref FROM knowledge_support_edges e"
+                " JOIN knowledge_revisions r"
+                "  ON ('knowledge/' || r.knowledge_id || '@' || r.revision) = e.used_ref"
+                " JOIN knowledge_revisions u"
+                "  ON ('knowledge/' || u.knowledge_id || '@' || u.revision) = e.user_ref"
+                " WHERE r.status='retracted' AND u.status<>'retracted'"
+                " ORDER BY e.user_ref",
+            ).fetchall()
+            # Not in use is still listed, never silently dropped, and counted
+            # the same way the affected set counts it.
+            retracted_items = [
+                {
+                    "version": row["user_ref"],
+                    "retracted_ref": row["used_ref"],
+                    "in_use": epistemic.in_use(db, row["user_ref"], anchors=anchors)["in_use"],
+                }
+                for row in retracted_rows[:8]
+            ]
+            retracted_refs = {
+                "total": len(retracted_rows),
+                "shown_count": len(retracted_items),
+                "not_in_use_count": sum(
+                    1 for item in retracted_items if item["in_use"] is False
+                ),
+                "items": retracted_items,
+            }
+
             # Fixed inputs determine provenance. Global question recency must never
             # crowd out an input's early negative results or later corrections.
             related_nodes = {node_id} if node_id else set()
@@ -949,6 +1424,8 @@ class MemoryStore:
                 # memory.  Put it ahead of the potentially large knowledge blocks
                 # so the total and its bounded sample survive context pressure.
                 ("pending_review", review_todos),
+                ("affected_knowledge", affected_knowledge),
+                ("retracted_refs", retracted_refs),
                 ("knowledge", knowledge),
                 ("questions", questions),
                 ("frozen_context", frozen_context),
@@ -977,7 +1454,13 @@ class MemoryStore:
             included_refs = []
             max_chars = max(500, min(max_chars, 12000))
             for name, value in blocks:
-                if value is None or value == [] or (name == "pending_review" and not value["pending_total"]):
+                if (
+                    value is None
+                    or value == []
+                    or (name == "pending_review" and not value["pending_total"])
+                    or (name == "affected_knowledge" and not value["total"])
+                    or (name == "retracted_refs" and not value["total"])
+                ):
                     continue
                 allowance = min(
                     max_chars - used - 150,
@@ -990,6 +1473,11 @@ class MemoryStore:
                         "control_instructions": 800,
                         "attempt": 400,
                         "pending_review": 2200,
+                        # Ahead of the large knowledge blocks on purpose: an
+                        # invalidated basis is what the coordinator must not
+                        # lose to context pressure.
+                        "affected_knowledge": 2400,
+                        "retracted_refs": 800,
                         "knowledge": 4000,
                         "questions": 1600 if coordinator else 800,
                         "frozen_context": 1600,

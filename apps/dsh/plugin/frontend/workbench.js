@@ -22,9 +22,9 @@ export function createWorkbench(React, rpc, openSession, projectGraph, ResearchG
       const life=lifecycle.current,seq=++requestSeq.current;
       try {
         const [summary,contextPreview,guidance]=await Promise.all([call('query'),call('context.preview'),call('guidance.status')]),previous=lastState.current;
-        const collections=['nodes','relations','dependencies','consumptions','usage_gaps','legacy_refs','attempts','publications','notes','snapshots','restorations','associations','knowledge','checkpoints','review_todos','specialists','sessions','tasks'];
+        const collections=['nodes','relations','dependencies','consumptions','usage_gaps','legacy_refs','attempts','publications','notes','snapshots','restorations','associations','knowledge','impacts','checkpoints','review_todos','specialists','sessions','tasks'];
         const loaded=await Promise.all(collections.map(async name=>{
-          if(!['nodes','attempts','review_todos','specialists','sessions','tasks'].includes(name)&&previous&&previous.counts?.[name]===summary.counts?.[name]&&previous[name])return[name,previous[name]];
+          if(!['nodes','attempts','impacts','review_todos','specialists','sessions','tasks'].includes(name)&&previous&&previous.counts?.[name]===summary.counts?.[name]&&previous[name])return[name,previous[name]];
           return[name,await loadCollection(name)];
         }));
         const value={...summary,...Object.fromEntries(loaded),context_preview:contextPreview,guidance};

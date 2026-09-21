@@ -146,9 +146,9 @@ export function registerResearchTools(ctx, domain) {
     }),
     tool(domain, {
       name: 'research_memory',
-      description: 'Record or revise sourced knowledge, checkpoint the current node, or run consolidation. For record, omitted node_id defaults to the current work segment node. Project-wide placement requires visibility="project" explicitly; without a current node supply node_id or project visibility. Placement is retrieval context, not access isolation; keep scientific applicability in conditions/scope. In manual mode consolidate only when the user explicitly asks. Claims, observations, and lessons require evidence_refs.',
+      description: 'Record or revise sourced knowledge, checkpoint the current node, dispose of an impact, or run consolidation. For record, omitted node_id defaults to the current work segment node. Project-wide placement requires visibility="project" explicitly; without a current node supply node_id or project visibility. Placement is retrieval context, not access isolation; keep scientific applicability in conditions/scope. In manual mode consolidate only when the user explicitly asks. Claims, observations, and lessons require evidence_refs. Retracting requires change_kind="retract" together with affected_scope_mode="versions" naming the version withdrawn. Every revise must declare affected_scope_mode: "versions" with the exact versions it invalidates, "none" if it invalidates nothing, or "unknown" if you cannot tell. Use relations[] with grounded_in for what a statement rests on (it becomes the basis and propagates), and motivated_by for what merely prompted the work (it does not propagate); for an open question, a prior finding is grounded_in when the question presupposes it and motivated_by when it only explains why this node was chosen now.',
       parameters: {
-        action: { type: 'string', required: true, enum: ['record', 'revise', 'checkpoint', 'consolidate'] },
+        action: { type: 'string', required: true, enum: ['record', 'revise', 'checkpoint', 'consolidate', 'dispose', 'narrow_scope'] },
         kind: { type: 'string', enum: ['observation', 'hypothesis', 'lesson', 'decision', 'open_question', 'claim'] },
         statement: { type: 'string' }, node_id: { type: 'string' }, status: { type: 'string' },
         visibility: { type: 'string', enum: ['node', 'project'] },
@@ -156,6 +156,23 @@ export function registerResearchTools(ctx, domain) {
         conditions: { type: 'object', additionalProperties: true, properties: {} },
         evidence_refs: { type: 'array', items: { type: 'string' } },
         dependencies: { type: 'array', items: { type: 'string' } },
+        motivated_by: { type: 'array', items: { type: 'string' } },
+        relations: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              type: { type: 'string', enum: ['grounded_in', 'answers', 'supersedes', 'complements', 'challenges'] },
+              target: { type: 'string' },
+            },
+          },
+        },
+        affected_scope_mode: { type: 'string', enum: ['versions', 'none', 'unknown'] },
+        affected_scope: { type: 'array', items: { type: 'string' } },
+        change_kind: { type: 'string', enum: ['retract', 'correct', 'narrow', 'reword'] },
+        change_id: { type: 'string' }, affected_version: { type: 'string' },
+        disposition_kind: { type: 'string', enum: ['unresolved', 'retained_with_evidence', 'revised', 'retracted'] },
+        replacement_ref: { type: 'string' },
         ref: { type: 'string' }, expected_revision: { type: 'number' }, reason: { type: 'string' },
         changes: { type: 'object', additionalProperties: true, properties: {} },
         state: { type: 'object', additionalProperties: true, properties: {} },
@@ -168,9 +185,13 @@ export function registerResearchTools(ctx, domain) {
         const state = await domain.state(exec.agent);
         if (!['main','node_core','exploration'].includes(state.workflow.session?.role)) throw new Error('This session cannot start a consolidation reviewer');
         const nodeId = state.workflow.session?.role === 'main' ? null : state.attempt?.node_id ?? state.workflow.session?.node_id;
+        // Consolidation takes its work from the impact ledger: review_todos is
+        // keyed by the triggering revision and cannot address one affected version.
+        const impact = await domain.request(exec.agent, 'impact_next', { node_id: nodeId });
         const todo = await domain.request(exec.agent, 'review_todo_next', { node_id: nodeId });
+        if (impact) await domain.request(exec.agent, 'impact_review_state', { change_id: impact.change_id, affected_version: impact.affected_version, state: 'running' }, `${id}:impact-running`);
         if (todo) await domain.request(exec.agent, 'review_todo_state', { todo_id: todo.todo_id, state: 'running' }, `${id}:todo-running`);
-        const inputs = [...new Set([...(args.evidence_refs ?? []), ...(todo ? [todo.trigger_ref] : [])])];
+        const inputs = [...new Set([...(args.evidence_refs ?? []), ...(impact ? [impact.affected_version] : []), ...(todo ? [todo.trigger_ref] : [])])];
         let review;
         try {
           review = await domain.delegate(exec.agent, {
@@ -178,13 +199,17 @@ export function registerResearchTools(ctx, domain) {
             prompt: `Review node ${nodeId ?? 'project planning'}. Fixed sources: ${JSON.stringify(inputs)}. Find relevant early negative results and conditions; identify conflicts; return proposed revisions with exact sources, reasons, and uncovered scope. Do not write research records.`,
           }, exec, id, 'review');
         } catch (error) {
+          if (impact) await domain.request(exec.agent, 'impact_review_state', { change_id: impact.change_id, affected_version: impact.affected_version, state: 'pending' }, `${id}:impact-pending`);
           if (todo) await domain.request(exec.agent, 'review_todo_state', { todo_id: todo.todo_id, state: 'pending' }, `${id}:todo-pending`);
           throw error;
         }
-        if (todo) await domain.request(exec.agent, 'review_todo_state', {
-          todo_id: todo.todo_id, state: review.state === 'completed' ? 'completed' : 'pending',
-        }, `${id}:todo-${review.state === 'completed' ? 'completed' : 'pending'}`);
-        return { todo, review };
+        // A returned proposal means the materials are ready, nothing more. It
+        // records no disposition and clears no risk; only an explicit
+        // research_memory(action="dispose") changes how a problem stands.
+        const parked = review.state === 'completed' ? 'proposal_ready' : 'pending';
+        if (impact) await domain.request(exec.agent, 'impact_review_state', { change_id: impact.change_id, affected_version: impact.affected_version, state: parked }, `${id}:impact-${parked}`);
+        if (todo) await domain.request(exec.agent, 'review_todo_state', { todo_id: todo.todo_id, state: parked }, `${id}:todo-${parked}`);
+        return { impact, todo, review };
       },
     }),
     tool(domain, {
@@ -235,7 +260,7 @@ export function registerResearchTools(ctx, domain) {
     tool(domain, {
       name: 'research_relate',
       method: 'relate',
-      description: 'Record a research relation or revision rationale. This stores evidence structure and does not judge scientific truth.',
+      description: 'Record a research relation between nodes or publications, or a revision rationale. This stores evidence structure and does not judge scientific truth. The reserved knowledge labels grounded_in, answers, supersedes, complements and challenges are refused here when both sides are knowledge versions: write those through research_memory relations[] so they are stored with the revision.',
       parameters: {
         source_ref: { type: 'string', required: true },
         target_ref: { type: 'string', required: true },

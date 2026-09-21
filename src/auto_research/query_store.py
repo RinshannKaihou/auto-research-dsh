@@ -35,6 +35,7 @@ COLLECTIONS = {
     "knowledge": ("knowledge_revisions", "rowid"),
     "checkpoints": ("node_checkpoints", "rowid"),
     "review_todos": ("review_todos", "rowid"),
+    "impacts": ("knowledge_impacts", "rowid"),
 }
 
 
@@ -52,7 +53,31 @@ class QueryStore:
     ) -> dict:
         value = dict(row)
         cursor = value.pop("_cursor")
-        if collection == "nodes":
+        if collection == "impacts":
+            # The row alone cannot be read: an affected version means nothing
+            # without the path back to what changed, and the two predicates are
+            # derived, never stored.
+            from . import epistemic
+
+            roots = epistemic.change_roots(db, value["change_id"])
+            version = value["affected_version"]
+            value["explanation"] = epistemic.explain_path(db, version, roots)
+            value["scope_unconfirmed"] = (
+                epistemic.effective_scope(db, value["change_id"])["mode"] == "unknown"
+            )
+            value["residual_use_risk"] = epistemic.residual_use_risk(db, version)
+            value["version_notices"] = epistemic.version_notices(db, version)
+            disposition = epistemic.current_disposition(db, value["change_id"], version)
+            value["disposition"] = disposition["kind"] if disposition else None
+            value["in_use"] = epistemic.in_use(db, version)["in_use"]
+            # Rows voided by a narrowing stay on disk for replay (R9); the
+            # default view must not show them as live work.
+            bound = epistemic.read_bound(db)
+            value["valid"] = any(
+                row["impact_id"] == value["impact_id"]
+                for row in epistemic.valid_impacts(db, bound, version=version)
+            )
+        elif collection == "nodes":
             value["inputs"] = json.loads(value["inputs"])
         elif collection == "attempts":
             value["details"] = json.loads(value["details"])
@@ -453,7 +478,7 @@ class QueryStore:
                 )
             ]
             return {
-                "schema_version": 6,
+                "schema_version": 7,
                 "project": project,
                 "association": dict(association) if association else None,
                 "attempt": {**dict(attempt), "details": json.loads(attempt["details"])}

@@ -22,6 +22,26 @@ export function createResearchDetails(React) {
       (group.relations??[]).length>0&&section('登记关系',h(Relations,{records:group.relations})),
       (group.references??[]).length>0&&section('固定输入与锚点',h(Relations,{records:group.references})));
   }
+  // Risks and version notices are rendered on separate lines on purpose: a
+  // newer revision existing is a pointer to look at, not a reason to re-review.
+  const presence=value=>value===true?'是':value===false?'否':'未算完';
+  function Affected({state,nodeId}) {
+    const owner=new Map((state.knowledge??[]).map(k=>[k.ref??`knowledge/${k.knowledge_id}@${k.revision}`,k.node_id]));
+    // Same set the coordinator context selects: valid at the current read
+    // boundary and not yet settled. Voided and disposed rows belong to history.
+    const rows=(state.impacts??[]).filter(i=>owner.get(i.affected_version)===nodeId&&i.valid!==false&&!['retained_with_evidence','revised','retracted'].includes(i.disposition));
+    const folded=rows.filter(i=>i.in_use===false).length;
+    if(!rows.length) return h('p',null,'无待处理的受影响条目');
+    return h(React.Fragment,null,
+      folded?h('p',{className:'ari-muted'},`另有 ${folded} 条不在使用中，仍列于下方`):null,
+      ...rows.map(i=>h('article',{key:`${i.change_id}:${i.affected_version}`},
+        h('strong',null,`${i.affected_version} · ${i.change_id} · 跳数 ${i.hop}`),
+        h('p',null,`复核进度：${i.review_state} · 处置：${i.disposition??'未处置'} · 使用中：${presence(i.in_use)}${i.scope_unconfirmed?' · 范围未确认':''}`),
+        h('p',null,`依据风险：${(i.residual_use_risk??[]).map(r=>r.reason).join('、')||'无'}`),
+        h('p',null,`版本提示：${(i.version_notices??[]).map(n=>n.notice).join('、')||'无'}`),
+        (i.uncovered_refs??[]).length?h('p',null,`未覆盖引用：${i.uncovered_refs.map(r=>r.ref).join('、')}`):null,
+        h('p',{className:'ari-preserve'},(i.explanation??[]).length?i.explanation.map(step=>`${step.from} --${step.source}--> ${step.to}`).join('  '):(i.hop===0?'该版本即变更根':'路径不可用')))));
+  }
   function Relations({records}) {
     return h('ul',{className:'ari-relations'},...records.map((r,i)=>h('li',{key:r.relation_id??`${r.kind}:${i}`},
       h('strong',null,r.label),h('p',null,`${r.source_ref} → ${r.target_ref}`),r.note&&h('p',{className:'ari-preserve'},r.note),
@@ -38,6 +58,7 @@ export function createResearchDetails(React) {
       section('提出理由',h('p',{className:'ari-preserve'},node.why_now||'未记录')),
       section('研究计划',h('p',{className:'ari-preserve'},node.plan||'未记录')),
       section('节点知识',h(React.Fragment,null,...(state.knowledge??[]).filter(item=>item.node_id===node.node_id).map(item=>h('article',{key:item.ref},h('strong',null,`${item.ref} · ${item.kind} · ${item.status}`),h('p',{className:'ari-preserve'},typeof item.statement==='string'?item.statement:item.statement?.preview),h('p',null,`条件：${json(item.conditions)}`))))),
+      section('受影响条目',h(Affected,{state,nodeId:node.node_id})),
       section('当前检查点',h('pre',null,json((state.checkpoints??[]).filter(item=>item.node_id===node.node_id).at(-1)?.state??'尚未保存'))),
       section('内部协作',h(React.Fragment,null,...(state.specialists??[]).filter(item=>item.node_id===node.node_id).map(item=>h('article',{key:item.task_id},h('strong',null,`${item.label} · ${item.state}`),h('p',null,item.purpose),item.child_session_id&&h('button',{onClick:()=>onSession(item.child_session_id)},'打开专家会话'))))),
       h(Records,{group:node,state,onSession,onRestore:snapshotId=>act('restore.preview',{snapshotId}),disabled}));

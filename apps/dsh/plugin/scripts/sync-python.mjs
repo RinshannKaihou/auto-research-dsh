@@ -10,6 +10,7 @@ mkdirSync(destination, { recursive: true });
 for (const file of [
   '__init__.py',
   'artifacts.py',
+  'epistemic.py',
   'errors.py',
   'migration.py',
   'maintenance_cli.py',
@@ -18,6 +19,7 @@ for (const file of [
   'query_store.py',
   'schema5.py',
   'schema6.py',
+  'schema7.py',
   'workflow_store.py',
   'service.py',
 ]) {

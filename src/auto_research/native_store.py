@@ -21,9 +21,11 @@ from .memory_store import MemoryStore, migrate_schema4, parse_knowledge_ref
 from .query_store import QueryStore
 from .schema5 import SCHEMA5_DDL, ensure_schema5_columns, migrate_schema5
 from .schema6 import migrate_schema6
+from .schema7 import SCHEMA7_DDL, ensure_schema7_columns, migrate_schema7
+from . import epistemic
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 ATTEMPT_STATES = frozenset({"open", "finished", "stopped", "unknown"})
 NODE_STATES = frozenset({"proposed", "open", "closed"})
 
@@ -72,7 +74,7 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
         if readonly:
             with self._connection() as db:
                 if db.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
-                    raise ValidationError("Read-only view requires schema 6")
+                    raise ValidationError(f"Read-only view requires schema {SCHEMA_VERSION}")
             return
         self.meta.mkdir(parents=True, exist_ok=True)
         if self.db_path.exists():
@@ -90,6 +92,9 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
             if version == 5:
                 migrate_schema6(self.db_path)
                 version = 6
+            if version == 6:
+                migrate_schema7(self.db_path)
+                version = 7
             if version not in {0, SCHEMA_VERSION}:
                 raise ValidationError(
                     f"Schema {version} must be migrated before native plugin writes"
@@ -223,7 +228,7 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
             CREATE TABLE IF NOT EXISTS counters (
                 name TEXT PRIMARY KEY, value INTEGER NOT NULL
             );
-            PRAGMA user_version=6;
+            PRAGMA user_version=7;
             """
         )
         db.executescript(DDL)
@@ -249,7 +254,11 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
         for statement in SCHEMA5_DDL.split(";"):
             if statement.strip():
                 db.execute(statement)
-        db.execute("PRAGMA user_version=6")
+        ensure_schema7_columns(db)
+        for statement in SCHEMA7_DDL.split(";"):
+            if statement.strip():
+                db.execute(statement)
+        db.execute("PRAGMA user_version=7")
 
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
@@ -944,6 +953,9 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
         }
 
         def work(db: sqlite3.Connection) -> dict:
+            # Captured before this transaction writes anything: the check's
+            # boundary must be the last already-committed event (R25).
+            publish_bound = epistemic.read_bound(db)
             association = self._association(db, host_id, session_id)
             attempt = self._attempt(db, association["association_id"])
             for ref in knowledge_refs:
@@ -1003,6 +1015,21 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
                     (publication_id, kid, revision),
                 )
             value = {"publication_id": publication_id, "refs": refs, "created_at": at}
+            if status == "complete":
+                # R25: checked and stored inside the publishing transaction, so
+                # the receipt names the exact ledger position it was taken at.
+                check = epistemic.publication_check(db, publication_id, publish_bound)
+                check_id = self._next(db, "publication_checks", "CK")
+                epistemic.store_publication_check(db, check_id, check, at)
+                value["check"] = {
+                    "check_id": check_id,
+                    "sequence_bound": check["sequence_bound"],
+                    "status": check["result"]["status"],
+                    "flagged": check["result"].get("flagged", []),
+                    "targets_complete": check["targets_complete"],
+                    "targets_truncated": check["targets_truncated"],
+                    "paths_truncated": check["paths_truncated"],
+                }
             self.notify_in_transaction(
                 db,
                 session_id,
@@ -1024,6 +1051,7 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
     def relate(
         self, source_ref: str, target_ref: str, label: str, note: str, request_id: str
     ) -> dict:
+        epistemic.reject_reserved_relate(source_ref, target_ref, label)
         payload = {
             "source_ref": _text(source_ref, "source_ref"),
             "target_ref": _text(target_ref, "target_ref"),

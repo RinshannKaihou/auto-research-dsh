@@ -34,8 +34,19 @@ def parser() -> argparse.ArgumentParser:
     migration.add_argument("--no-files", action="store_true")
 
     commands.add_parser("validate", help="Read-only SQLite integrity and schema validation")
-    export = commands.add_parser("export", help="Export a schema-6 state view as JSON")
+    export = commands.add_parser("export", help="Export a schema-7 state view as JSON")
     export.add_argument("--output", type=Path, required=True)
+
+    rebuild = commands.add_parser(
+        "rebuild-edges",
+        help="Recompute knowledge support edges from the revisions (offline copy only)",
+    )
+    rebuild.add_argument(
+        "--confirm-copy",
+        action="store_true",
+        required=True,
+        help="Acknowledge that this writes to the project it is pointed at",
+    )
     return app
 
 
@@ -59,7 +70,7 @@ def validate_project(root: Path) -> dict:
             name = row[0]
             quoted = name.replace('"', '""')
             tables[name] = int(db.execute(f'SELECT count(*) FROM "{quoted}"').fetchone()[0])
-    supported = version in {1, 2, 3, 4, 5, 6}
+    supported = version in {1, 2, 3, 4, 5, 6, 7}
     return {
         "root": str(root),
         "schema_version": version,
@@ -77,7 +88,7 @@ def execute(args: argparse.Namespace) -> dict:
         return validate_project(root)
     if args.command == "export":
         result = validate_project(root)
-        if result["schema_version"] != 6 or not result["ok"]:
+        if result["schema_version"] != 7 or not result["ok"]:
             raise ValueError("Export requires a valid schema-6 project")
         output = args.output.expanduser().resolve()
         if output.exists():
@@ -85,7 +96,25 @@ def execute(args: argparse.Namespace) -> dict:
         output.parent.mkdir(parents=True, exist_ok=True)
         state = redact(NativeStore(root, readonly=True).query())
         output.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n")
-        return {"output": str(output), "schema_version": 6}
+        return {"output": str(output), "schema_version": 7}
+    if args.command == "rebuild-edges":
+        # Offline repair only. The edges are derived from the revisions, so a
+        # rebuild can never invent one; it can only restore what a partial
+        # write lost. Point it at a copy -- it writes.
+        from .schema7 import rebuild_support_edges
+
+        database = root / ".research" / "state.sqlite3"
+        if not database.is_file():
+            raise ValueError(f"Research database does not exist: {database}")
+        with sqlite3.connect(database, isolation_level=None) as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                total = rebuild_support_edges(db)
+                db.execute("COMMIT")
+            except BaseException:
+                db.execute("ROLLBACK")
+                raise
+        return {"root": str(root), "edges": total, "schema_version": 7}
     if args.command == "migration":
         if args.action == "recovery-preview":
             if not args.attempt:

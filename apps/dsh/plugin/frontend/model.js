@@ -62,6 +62,10 @@ export function projectGraph(state) {
     }
   }
   for (const r of state.relations ?? []) {
+    // Declared knowledge relations are epistemic claims, not execution
+    // lineage. Projecting them here would grow new edges on the node graph,
+    // which this release explicitly does not add.
+    if (r.relation_type === 'knowledge') continue;
     const source = resolve(r.source_ref), target = resolve(r.target_ref);
     const record = {...r,kind:'relation',source,target};
     for (const id of new Set([source,target])) if (id) nodes.get(id).relations.push(record);

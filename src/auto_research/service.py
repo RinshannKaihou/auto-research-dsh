@@ -622,7 +622,7 @@ class NativeService:
         method = request.get("method")
         if method == "capabilities":
             value = {
-                "schema_version": 6,
+                "schema_version": 7,
                 "execution_owner": "dsh",
                 "model_loop": "native-goals",
                 "manual_research": True,
@@ -971,8 +971,15 @@ class NativeService:
                     value = store.revise_knowledge(fields, self._operation(request))
                 elif action == "checkpoint":
                     value = store.checkpoint(fields, self._operation(request))
+                elif action == "dispose":
+                    value = store.dispose_impact(fields, self._operation(request))
+                elif action == "narrow_scope":
+                    value = store.narrow_impact_scope(fields, self._operation(request))
                 else:
-                    raise ValueError("memory_write action must be record, revise, or checkpoint")
+                    raise ValueError(
+                        "memory_write action must be record, revise, checkpoint,"
+                        " dispose, or narrow_scope"
+                    )
             elif method == "specialist_create":
                 if not role or role["role"] not in {"main", "node_core", "exploration"}:
                     raise ValueError("Only managed research agents may delegate specialists")
@@ -1041,6 +1048,35 @@ class NativeService:
                 )
             elif method == "specialist_get":
                 value = store.specialist_get(request.get("task_id"))
+            elif method == "impact_next":
+                value = store.impact_next(request.get("node_id"))
+            elif method == "impact_review_state":
+                value = store.impact_review_state(
+                    request.get("change_id"),
+                    request.get("affected_version"),
+                    request.get("state"),
+                    self._operation(request),
+                )
+            elif method == "knowledge_impacts":
+                value = store.knowledge_impacts(
+                    version=request.get("version"),
+                    change_id=request.get("change_id"),
+                    limit=int(request.get("limit") or 50),
+                    offset=int(request.get("offset") or 0),
+                    bound=request.get("bound"),
+                )
+            elif method == "knowledge_risk":
+                value = store.knowledge_risk(
+                    request.get("versions") or [], request.get("bound")
+                )
+            elif method == "publication_check":
+                value = (
+                    store.stored_publication_check(request["publication_id"])
+                    if request.get("stored")
+                    else store.publication_check(
+                        request["publication_id"], request.get("bound")
+                    )
+                )
             elif method == "review_todo_next":
                 value = store.review_todo_next(request.get("node_id"))
             elif method == "review_todo_state":
