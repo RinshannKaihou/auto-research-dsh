@@ -1,0 +1,48 @@
+{
+  "schema": "research-presentation/v1",
+  "project_id": "88627928-75af-48dc-a4f3-10519f974856",
+  "source_publication_id": "P-007",
+  "title": "vLLM 稳定性检测优化",
+  "summary": "目标已结束。默认采用 gated_fusion_v2:core；在同一 audit 语料上，adjusted F1 从 0.40115 提升至 0.78669，core recall 从 0.256 提升至 0.530。v2.1 与 v2.2 未采纳；已发布替换包与最终报告。",
+  "summary_ref": "pub/P-007#final-report",
+  "featured_node_id": "X-005",
+  "report_ref": "pub/P-007#final-report",
+  "deliverables": [
+    {"label": "替换包使用说明", "ref": "pub/P-007#deliverable-package"},
+    {"label": "替换包 analyze.py", "ref": "S-008#vllm_stability_test_v2/analyze.py"},
+    {"label": "默认冠军规则", "ref": "S-008#vllm_stability_test_v2/stability_gf2/rule_champion.json"}
+  ],
+  "nodes": {
+    "X-001": {"title": "建立可复现的评测基座", "summary": "搭建本地评测与开销基座，复现检查 156/156 通过。", "outcome": "测量基座完成", "refs": ["pub/P-001"]},
+    "X-002": {"title": "早期候选方案", "summary": "旧提案在发布物化阶段失败，由 X-003 接续完成候选对比。", "outcome": "已被 X-003 替代", "refs": ["X-002"]},
+    "X-003": {"title": "候选检测器对比", "summary": "对历史候选进行同口径评测与误报诊断，确定门控融合方向。", "outcome": "完成候选筛选", "refs": ["pub/P-002"]},
+    "X-004": {"title": "门控融合 v1", "summary": "v1 降低开销，但 audit 误报与召回未达到最终要求。", "outcome": "未成为冠军", "refs": ["pub/P-003"]},
+    "X-005": {"title": "gated_fusion_v2:core · 默认冠军", "summary": "在 audit 口径下通过核心验收，成为最终默认方案。", "outcome": "采用为默认方案", "refs": ["pub/P-004", "S-007#results/gated_fusion_v2_core_audit.json"]},
+    "X-006": {"title": "v2.1 复核与替换包", "summary": "v2.1 未通过全部预注册验收；冠军保持 v2:core，并完成 drop-in 替换包。", "outcome": "新方案未采纳 · 交付完成", "refs": ["pub/P-005", "S-008#results/bench_node6.json"]},
+    "X-007": {"title": "v2.2 跨折验证", "summary": "v2.2 的 6 项 CV 标准只通过 3 项，未采纳；默认冠军不变。", "outcome": "未采纳 · 研究收敛", "refs": ["pub/P-006"]}
+  },
+  "metrics": [
+    {
+      "id": "audit-adjusted-f1", "label": "Audit adjusted F1", "unit": "", "direction": "higher", "split": "audit", "display_decimals": 5, "population": "5766 条固定审计样本", "protocol": "contract adjusted F1",
+      "baseline": {"ref": "S-004#results/vendor_pinned_audit.json", "pointer": "/calibers/contract/adjusted_f1"},
+      "current": {"ref": "S-007#results/gated_fusion_v2_core_audit.json", "pointer": "/calibers/contract/adjusted_f1"}
+    },
+    {
+      "id": "audit-core-recall", "label": "Audit core recall", "unit": "", "direction": "higher", "split": "audit", "display_decimals": 3, "population": "5766 条固定审计样本", "protocol": "core only recall",
+      "baseline": {"ref": "S-004#results/vendor_pinned_audit.json", "pointer": "/calibers/core_only/recall"},
+      "current": {"ref": "S-007#results/gated_fusion_v2_core_audit.json", "pointer": "/calibers/core_only/recall"}
+    },
+    {
+      "id": "audit-clean-fpr", "label": "Audit clean FPR", "unit": "", "direction": "lower", "split": "audit", "display_decimals": 5, "population": "5766 条固定审计样本", "protocol": "core only clean FPR",
+      "threshold": {"operator": "≤", "value": 0.01, "ref": "pub/P-007#final-report"},
+      "baseline": {"ref": "S-004#results/vendor_pinned_audit.json", "pointer": "/calibers/core_only/clean_fpr"},
+      "current": {"ref": "S-007#results/gated_fusion_v2_core_audit.json", "pointer": "/calibers/core_only/clean_fpr"}
+    },
+    {
+      "id": "packaged-overhead", "label": "打包交付版开销比", "unit": "×", "direction": "lower", "split": "bench", "display_decimals": 4, "population": "同一测量会话", "protocol": "overhead ratio vs pinned baseline",
+      "threshold": {"operator": "≤", "value": 2.0, "ref": "pub/P-007#final-report"},
+      "baseline": {"ref": "S-008#results/bench_node6.json", "pointer": "/detectors/vendor_baseline:pinned@vendor_pinned/overhead_ratio_vs_baseline"},
+      "current": {"ref": "S-008#results/bench_node6.json", "pointer": "/detectors/packaged_vst2@packaged_champion/overhead_ratio_vs_baseline"}
+    }
+  ]
+}

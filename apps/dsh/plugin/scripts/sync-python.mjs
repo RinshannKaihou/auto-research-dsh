@@ -26,6 +26,7 @@ for (const file of [
   'schema8.py',
   'schema9.py',
   'workflow_store.py',
+  'workbench_read.py',
   'service.py',
 ]) {
   copyFileSync(join(source, file), join(destination, file));

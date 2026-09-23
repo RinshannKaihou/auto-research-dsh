@@ -1,0 +1,22 @@
+{
+  "schema": "research-presentation/v1",
+  "project_id": "REPLACE_WITH_LEDGER_PROJECT_ID",
+  "source_publication_id": "P-001",
+  "title": "项目短标题",
+  "summary": "有来源支撑的一句话研究结论；没有确认的结论请留在原报告中。",
+  "summary_ref": "pub/P-001#report",
+  "featured_node_id": "X-001",
+  "report_ref": "pub/P-001#report",
+  "deliverables": [
+    {"label": "最终报告", "ref": "pub/P-001#report"}
+  ],
+  "nodes": {
+    "X-001": {
+      "title": "研究阶段短标题",
+      "summary": "本阶段的结果与限制。",
+      "outcome": "已完成实验",
+      "refs": ["pub/P-001#report"]
+    }
+  },
+  "metrics": []
+}

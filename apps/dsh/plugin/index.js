@@ -69,6 +69,22 @@ export function apply(ctx, config = {}) {
         if (endpoint === 'query' || endpoint === 'status') {
           return { ok: true, value: await domain.query(agent) };
         }
+        if (endpoint === 'workbench.summary') return {ok:true,value:await domain.workbenchSummary(agent)};
+        if (endpoint === 'workbench.page') return {ok:true,value:await domain.workbenchPage(agent, {
+          collection:payload.collection,...(payload.cursor??{}),limit:payload.limit??20,node_id:payload.nodeId,kind:payload.kind,
+        })};
+        if (endpoint === 'knowledge.page') return {ok:true,value:await domain.knowledgePage(agent, {
+          query:payload.query,kind:payload.kind,status:payload.status,node_id:payload.nodeId,
+          knowledge_id:payload.knowledgeId,history:payload.history===true,
+          ...(payload.cursor??{}),limit:payload.limit??20,
+        })};
+        if (endpoint === 'presentation.get') return {ok:true,value:await domain.presentationGet(agent)};
+        if (endpoint === 'reference.entries') return {ok:true,value:await domain.referenceEntries(agent, {
+          ref:payload.ref,...(payload.cursor??{}),limit:payload.limit??50,
+        })};
+        if (endpoint === 'reference.content') return {ok:true,value:await domain.referenceContent(agent, {
+          ref:payload.ref,offset:payload.offset??0,limit:payload.limit??32768,
+        })};
         if (endpoint === 'history.page') {
           return { ok: true, value: await domain.page(agent, payload.collection, payload.cursor ?? {}, payload.limit ?? 50) };
         }

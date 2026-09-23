@@ -1,11 +1,11 @@
-# auto-research-v5 0.6.6
+# auto-research-v5 0.6.10
 
 这是安装在正式 DSH 内的研究插件。DSH 继续负责模型请求、原生工具、会话轨迹、goal、subagent、权限与取消；插件增加研究项目、知识、材料、并行探索、节点专家和恢复工作流。Python 3.11+ 私有进程只处理 SQLite 与文件事务，不调用模型，也不运行独立研究循环。
 
 ## 安装与开始
 
 ```bash
-dsh plugin --profile web add ./auto-research-v5-0.6.6.tgz --offline
+dsh plugin --profile web add ./auto-research-v5-0.6.10.tgz --offline
 dsh web
 ```
 
@@ -17,6 +17,20 @@ dsh web
 ```
 
 `init` 只建立项目并关联当前原生会话，不调用模型。空白会话没有顶部标签栏，请点击输入区上方的“打开研究工作台”，直接在弹窗查看项目或关联已有项目；不需要先发普通消息。`init/status` 每次显示编号、时间和命令结果。已有对话的顶部 Research 标签仍可用。`auto` 或工作台“开始自主研究”才启动研究 goal 并可能产生模型费用。项目用量只监控，没有预算或消费上限。
+
+## 0.6.10 Research 工作台
+
+工作台默认进入“成果概览”，导航依次提供研究过程、成果与知识、材料、运行与维护。研究过程默认是可扫读的时间线；执行图采用可读的初始缩放。知识默认只列每个 ID 的现行修订，旧版从条目详情进入。材料按钮读取已校验的冻结对象，Markdown 报告直接显示正文；浏览与选择不会启动模型或修改研究账本。
+
+概览的短标题、摘要和可比指标来自项目根目录的可选 `research.presentation.json`。它使用 `research-presentation/v1` 格式，以项目 ID 绑定账本；指标用冻结引用与 JSON pointer 绑定，页面现读冻结数值。缺少资料时，工作台保留导航、登记的阶段材料和知识检索，并明确标注未提供摘要。资料过期、项目 ID 不符、冻结引用不可用时显示提示。模板是包内的 `research.presentation.template.json`；示例见 `examples/vllm-stability.research.presentation.json`。
+
+复制并编辑模板后，在项目根目录执行只读校验：
+
+```bash
+python3 scripts/validate-presentation.py /absolute/path/to/project
+```
+
+展示摘要仅供阅读，不能代替原报告或科学验收。执行结束、材料发布、知识状态和是否成为最终方案分别显示。门槛与指标保留各自的数据划分；dev、audit、OOF、CV 不合成一条趋势线。浏览用的只读 `workbench.summary`、`workbench.page`、`knowledge.page`、`presentation.get`、`reference.entries`、`reference.content` 经 `/research-v5` 通道调用，文件读取只接受冻结引用。
 
 ## 命令
 

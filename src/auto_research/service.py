@@ -7,7 +7,7 @@ browser or model.
 
 from __future__ import annotations
 
-from . import frozen_refs
+from . import frozen_refs, workbench_read
 
 import argparse
 import hashlib
@@ -710,7 +710,7 @@ class NativeService:
                 role = dict(row) if row else None
             with store._connection() as db:
                 specialist_row = db.execute("SELECT t.* FROM specialist_tasks t JOIN specialist_bindings b USING(task_id) WHERE b.session_id=?", (session_id,)).fetchone()
-            if specialist_row and specialist_row["context_mode"] == "blind" and method in {"query", "status", "history_page", "guidance_status"}:
+            if specialist_row and specialist_row["context_mode"] == "blind" and method in {"query", "status", "history_page", "guidance_status", "workbench_summary", "workbench_page", "knowledge_page", "presentation_get", "reference_content", "reference_entries"}:
                 raise ValueError("Blind reviewers may only read assigned inputs through research_read_input")
             writes = {
                 "focus",
@@ -884,6 +884,34 @@ class NativeService:
             elif method == "status" or method == "control_state":
                 value = store.control_state(host_id, session_id)
                 value["project_root"] = str(root)
+            elif method == "workbench_summary":
+                value = workbench_read.summary(store, host_id, session_id)
+            elif method == "workbench_page":
+                value = workbench_read.page(
+                    store, request.get("collection"), after=request.get("after", 0),
+                    upper_id=request.get("upper_id"), limit=request.get("limit", 20),
+                    node_id=request.get("node_id"), kind=request.get("kind"),
+                )
+            elif method == "knowledge_page":
+                value = workbench_read.knowledge_page(
+                    store, query=request.get("query", ""), kind=request.get("kind"),
+                    status=request.get("status"), node_id=request.get("node_id"),
+                    knowledge_id=request.get("knowledge_id"), history=request.get("history", False),
+                    after=request.get("after", 0), upper_id=request.get("upper_id"),
+                    limit=request.get("limit", 20),
+                )
+            elif method == "presentation_get":
+                value = workbench_read.presentation(store, root)
+            elif method == "reference_entries":
+                value = workbench_read.reference_entries(
+                    store, root, request.get("ref"), after=request.get("after", 0),
+                    limit=request.get("limit", 50),
+                )
+            elif method == "reference_content":
+                value = workbench_read.reference_content(
+                    store, root, request.get("ref"), offset=request.get("offset", 0),
+                    limit=request.get("limit", 32768),
+                )
             elif method == "query":
                 if request.get("ref") and request.get("offset") is not None:
                     value = store.reference_chunk(

@@ -1,6 +1,6 @@
 {
   "name": "auto-research-v5",
-  "version": "0.6.9",
+  "version": "0.6.10",
   "description": "Native DSH research workflow plugin",
   "type": "module",
   "main": "index.js",
@@ -16,7 +16,10 @@
     "python/**/*.py",
     "LICENSES/*",
     "frontend/*.js",
-    "scripts/*.mjs"
+    "scripts/*.mjs",
+    "scripts/*.py",
+    "research.presentation.template.json",
+    "examples/*.json"
   ],
   "scripts": {
     "prepack": "node scripts/build-client.mjs && node scripts/sync-python.mjs",

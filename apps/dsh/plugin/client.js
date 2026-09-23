@@ -151,7 +151,7 @@ function clampZoom(k) { return Math.max(0.12,Math.min(2.5,k)); }
 
 function createResearchGraph(React, layoutGraph, inViewport, clampZoom) {
   const h=React.createElement;
-  return function ResearchGraph({model,visibleIds,selected,onSelect,onEdge,focused}) {
+  return function ResearchGraph({model,visibleIds,selected,onSelect,onEdge,focused,labels={}}) {
     const root=React.useRef(null), drag=React.useRef(null), moved=React.useRef(false), fitted=React.useRef(false);
     const [size,setSize]=React.useState({width:0,height:560});
     const [camera,setCamera]=React.useState({x:24,y:24,k:1});
@@ -170,7 +170,13 @@ function createResearchGraph(React, layoutGraph, inViewport, clampZoom) {
       const k=clampZoom(Math.min(1.2,size.width/w,size.height/hh));
       setCamera({x:(size.width-w*k)/2-x*k,y:(size.height-hh*k)/2-y*k,k});
     }
-    React.useEffect(()=>{ if(!fitted.current && model.nodes.length && size.width) { fit(); fitted.current=true; } },[model.structuralKey,size]);
+    React.useEffect(()=>{
+      if(!fitted.current && model.nodes.length && size.width) {
+        const first=layout.positions.get(focused)??layout.positions.get(model.nodes[0].node_id);
+        setCamera({x:24-first.x,y:28-first.y,k:1});fitted.current=true;
+      }
+    },[model.structuralKey,size.width]);
+    React.useEffect(()=>{if(selected&&size.width)reveal(selected);},[selected,size.width]);
     function zoom(factor) { setCamera(c=>{const k=clampZoom(c.k*factor),f=k/c.k;return {k,x:size.width/2-(size.width/2-c.x)*f,y:size.height/2-(size.height/2-c.y)*f};}); }
     function reveal(id) {
       const p=layout.positions.get(id);
@@ -205,7 +211,7 @@ function createResearchGraph(React, layoutGraph, inViewport, clampZoom) {
     return h('div',{className:'ari-graph-shell'},
       h('div',{className:'ari-graph-tools'},h('span',null,'实线：原始关系 · 补录：lineage_correction · 虚线：输入 · 点线：锚点'),
         h('button',{onClick:()=>zoom(1/1.25),'aria-label':'缩小研究图'},'−'),h('span',{'aria-live':'polite'},`${Math.round(camera.k*100)}%`),
-        h('button',{onClick:()=>zoom(1.25),'aria-label':'放大研究图'},'+'),h('button',{onClick:fit},'适应全部')),
+        h('button',{onClick:()=>zoom(1.25),'aria-label':'放大研究图'},'+'),h('button',{onClick:fit},'显示全图')),
       h('div',{ref:root,className:'ari-canvas',onPointerDown:e=>{moved.current=false;if(e.button!==0 || e.target.closest('[role="button"]'))return;moved.current=false;drag.current={x:e.clientX,y:e.clientY,camera};e.currentTarget.setPointerCapture(e.pointerId);},
         onPointerMove:e=>{if(!drag.current)return;const dx=e.clientX-drag.current.x,dy=e.clientY-drag.current.y;moved.current=Math.abs(dx)+Math.abs(dy)>3;setCamera({...drag.current.camera,x:drag.current.camera.x+dx,y:drag.current.camera.y+dy});},
         onPointerUp:()=>{drag.current=null;},onPointerCancel:()=>{drag.current=null;},
@@ -218,80 +224,11 @@ function createResearchGraph(React, layoutGraph, inViewport, clampZoom) {
               onClick:()=>select(n.node_id),onKeyDown:e=>key(e,n.node_id)},
               h('title',null,n.question),h('rect',{width:260,height:128,rx:10}),
               h('text',{x:16,y:25,className:'ari-node-id'},n.node_id),h('text',{x:244,y:25,textAnchor:'end',className:'ari-node-status'},`${n.status}${focused===n.node_id?' · 当前':''}`),
-              h('foreignObject',{x:16,y:37,width:228,height:49},h('div',{className:'ari-node-question'},n.question)),
-              h('text',{x:16,y:110,className:'ari-node-meta'},`${n.lineage_corrected?'谱系已补录 · ':''}${n.strategy ?? 'continue'} · ${n.attempts.length} 工作段 · ${n.publications.length} 发布`));}))),
+              h('foreignObject',{x:16,y:37,width:228,height:49},h('div',{className:'ari-node-question'},labels[n.node_id]?.title??n.question)),
+              h('text',{x:16,y:110,className:'ari-node-meta'},`${n.lineage_corrected?'谱系已补录 · ':''}${labels[n.node_id]?.outcome??n.strategy??'研究节点'}`));}))),
         !nodes.length&&h('p',{className:'ari-empty'},model.nodes.length?'没有匹配的节点；清除筛选后查看。':'尚无研究节点。规划工作和材料可在下方查看。')),
       h('span',{className:'ari-sr-only'},`共 ${nodes.length} 个节点，可视区域 ${rendered.size} 个。也可切换列表访问所有节点。`));
   };
-}
-
-function createResearchDetails(React) {
-  const h=React.createElement;
-  const json=value=>typeof value==='string'?value:JSON.stringify(value,null,2);
-  const provenance=item=>[h('p',null,'记账来源：',item.asserted_at?JSON.stringify(item.asserted_at):'历史记录，无来源'),...(item.source_identity?[h('p',null,'自述来源：',JSON.stringify(item.source_identity))]:[]),...(item.execution_refs??[]).map((ref,index)=>h('p',{key:`execution-${index}`},`执行来源：${ref.ref} · ${ref.status==='linked'?'已关联':`未关联 · ${ref.reason}`}`))];
-  const status=value=>value==='open'?'未结束':value;
-  const section=(title,content)=>h('section',{className:'ari-detail-section'},h('h4',null,title),content);
-  function Records({group,state,onSession,onRestore,disabled}) {
-    const associations=new Map((state.associations??[]).map(a=>[a.association_id,a]));
-    return h(React.Fragment,null,
-      section(`研究执行历史 · ${group.attempts.length}`,group.attempts.length?group.attempts.map(a=>h('article',{key:a.attempt_id},
-        h('strong',null,`${a.attempt_id} · ${status(a.state)} · ${a.mode}`),h('p',null,`${a.started_at} → ${a.ended_at??'尚未结束'}`),
-        associations.has(a.association_id)&&h('button',{onClick:()=>onSession(associations.get(a.association_id).session_id)},'打开原生会话'),
-        h('p',null,`结束原因：${a.details?.reason??'未记录'}；结束不代表实验成功。`),h('details',null,h('summary',null,'工作段记录'),h('pre',null,json(a.details))))):h('p',null,'暂无工作段')),
-      section(`阶段材料 · ${group.publications.length}`,group.publications.map(p=>h('article',{key:p.publication_id},
-        h('strong',null,`${p.publication_id} · ${p.status}`),h('p',null,p.summary),...provenance(p),
-        (p.gaps??[]).length>0&&h('p',null,`缺口：${p.gaps.join('；')}`),
-        ...(p.items??[]).map(i=>h('details',{key:i.item_id},h('summary',null,i.ref??`pub/${p.publication_id}#${i.item_id}`),
-          h('p',null,`${i.kind} · ${i.source_path??'内嵌材料'}`),i.object_version&&h('code',null,i.object_version),h('pre',null,json(i.content))))))),
-      section(`历史文件快照 · ${group.snapshots.length}`,group.snapshots.map(s=>h('article',{key:s.snapshot_id},h('strong',null,`${s.snapshot_id} · ${s.complete?'完整':'部分'} · ${s.attempt_id}`),
-        h('details',null,h('summary',null,'文件清单'),...(s.manifest??[]).map((m,i)=>h('p',{key:i},`${m.source_path??m.path} · ${m.status??''} · ${m.version??''}`))),
-        h('button',{disabled,onClick:()=>onRestore(s.snapshot_id)},'预览接手材料')))),
-      section(`笔记 · ${group.notes.length}`,group.notes.map(n=>h('details',{key:n.note_id},h('summary',null,`${n.note_id} · ${n.kind}`),h('p',{className:'ari-preserve'},n.body)))),
-      (group.relations??[]).length>0&&section('登记关系',h(Relations,{records:group.relations})),
-      (group.references??[]).length>0&&section('固定输入与锚点',h(Relations,{records:group.references})));
-  }
-  // Risks and version notices are rendered on separate lines on purpose: a
-  // newer revision existing is a pointer to look at, not a reason to re-review.
-  const presence=value=>value===true?'是':value===false?'否':'未算完';
-  function Affected({state,nodeId}) {
-    const owner=new Map((state.knowledge??[]).map(k=>[k.ref??`knowledge/${k.knowledge_id}@${k.revision}`,k.node_id]));
-    // Same set the coordinator context selects: valid at the current read
-    // boundary and not yet settled. Voided and disposed rows belong to history.
-    const rows=(state.impacts??[]).filter(i=>owner.get(i.affected_version)===nodeId&&i.valid!==false&&!['retained_with_evidence','revised','retracted'].includes(i.disposition));
-    const folded=rows.filter(i=>i.in_use===false).length;
-    if(!rows.length) return h('p',null,'无待处理的受影响条目');
-    return h(React.Fragment,null,
-      folded?h('p',{className:'ari-muted'},`另有 ${folded} 条不在使用中，仍列于下方`):null,
-      ...rows.map(i=>h('article',{key:`${i.change_id}:${i.affected_version}`},
-        h('strong',null,`${i.affected_version} · ${i.change_id} · 跳数 ${i.hop}`),
-        h('p',null,`复核进度：${i.review_state} · 处置：${i.disposition??'未处置'} · 使用中：${presence(i.in_use)}${i.scope_unconfirmed?' · 范围未确认':''}`),
-        h('p',null,`依据风险：${(i.residual_use_risk??[]).map(r=>r.reason).join('、')||'无'}`),
-        h('p',null,`版本提示：${(i.version_notices??[]).map(n=>n.notice).join('、')||'无'}`),
-        (i.uncovered_refs??[]).length?h('p',null,`未覆盖引用：${i.uncovered_refs.map(r=>r.ref).join('、')}`):null,
-        h('p',{className:'ari-preserve'},(i.explanation??[]).length?i.explanation.map(step=>`${step.from} --${step.source}--> ${step.to}`).join('  '):(i.hop===0?'该版本即变更根':'路径不可用')))));
-  }
-  function Relations({records}) {
-    return h('ul',{className:'ari-relations'},...records.map((r,i)=>h('li',{key:r.relation_id??`${r.kind}:${i}`},
-      h('strong',null,r.label),...(r.relation_id?provenance(r):[]),h('p',null,`${r.source_ref} → ${r.target_ref}`),r.note&&h('p',{className:'ari-preserve'},r.note),
-      (!r.source||!r.target)&&h('small',null,'项目级或未归属引用；未生成节点连线'),r.source&&r.source===r.target&&h('small',null,'同节点引用'))));
-  }
-  function Details({node,edge,state,act,disabled,onSession,onClose}) {
-    if(edge) return h('aside',{className:'ari-details','aria-label':'关系详情'},h('button',{onClick:onClose},'关闭详情'),h('h3',null,`${edge.source} → ${edge.target}`),h(Relations,{records:edge.records}));
-    if(!node) return h('aside',{className:'ari-details ari-detail-empty'},h('h3',null,'选择一个研究节点'),h('p',null,'查看计划、固定输入、阶段材料和全部工作段。选中节点不会启动研究。'));
-    return h('aside',{className:'ari-details','aria-label':'节点详情'},h('button',{onClick:onClose},'关闭详情'),
-      h('small',null,`${node.node_id} · ${node.status} · ${node.strategy??'continue'}`),h('h3',null,node.question),
-      node.lineage_corrected&&h('p',{role:'status'},'谱系已补录／原始声明为根节点'),
-      h('div',{className:'ari-actions'},h('button',{disabled,onClick:()=>act('discussion.open',{nodeId:node.node_id})},'围绕此节点讨论'),h('details',null,h('summary',null,'更多'),h('button',{disabled,onClick:()=>act('discussion.open',{nodeId:node.node_id,fresh:true})},'新建另一场讨论'))),
-      section('议程锚',h('p',null,node.question_ref??'旧节点尚无可确认的问题版本')),
-      section('提出理由',h('p',{className:'ari-preserve'},node.why_now||'未记录')),
-      section('研究计划',h('p',{className:'ari-preserve'},node.plan||'未记录')),
-      section('节点知识',h(React.Fragment,null,...(state.knowledge??[]).filter(item=>item.node_id===node.node_id).map(item=>h('article',{key:item.ref},h('strong',null,`${item.ref} · ${item.kind} · ${item.status}`),h('p',{className:'ari-preserve'},typeof item.statement==='string'?item.statement:item.statement?.preview),h('p',null,`条件：${json(item.conditions)}`),...provenance(item))))),
-      section('受影响条目',h(Affected,{state,nodeId:node.node_id})),
-      section('当前检查点',h('pre',null,json((state.checkpoints??[]).filter(item=>item.node_id===node.node_id).at(-1)?.state??'尚未保存'))),
-      section('内部协作',h(React.Fragment,null,...(state.specialists??[]).filter(item=>item.node_id===node.node_id).map(item=>h('article',{key:item.task_id},h('strong',null,`${item.label} · ${item.state}`),h('p',null,item.purpose),item.child_session_id&&h('button',{onClick:()=>onSession(item.child_session_id)},'打开专家会话'))))),
-      h(Records,{group:node,state,onSession,onRestore:snapshotId=>act('restore.preview',{snapshotId}),disabled}));
-  }
-  return {Details,Records,Relations};
 }
 
 const researchStyles = `
@@ -307,172 +244,475 @@ const researchStyles = `
 @media(max-width:1000px){.ari-layout{grid-template-columns:minmax(0,1fr)}.ari-details{border-left:0;border-top:1px solid var(--ari-line);padding:16px 0;max-height:none}.ari-canvas{height:440px}}@media(max-width:600px){.ari-v5{padding:12px 12px 200px}.ari-canvas{height:380px}.ari-stats{gap:12px}.ari-stats strong{font-size:16px}.ari-toolbar input{width:100%}.ari-receipt-row{flex-wrap:wrap}.ari-receipt-copy{flex-basis:calc(100% - 40px)}.ari-receipt-entry{display:block;margin-left:36px;white-space:normal}.ari-workbench-dialog{width:98vw;max-width:98vw;height:96dvh;max-height:96dvh}.ari-dialog-bar{padding:10px}}@media(prefers-reduced-motion:reduce){.ari-v5 *{transition:none!important;animation:none!important}}
 `;
 
-function createWorkbench(React, rpc, openSession, projectGraph, ResearchGraph, components, researchStyles) {
-  const h=React.createElement, {Details,Records}=components;
+const researchAppStyles = `
+.ari-app{--ari-ink:var(--dsw-alias-text-primary,var(--foreground,CanvasText));--ari-muted:var(--dsw-alias-text-secondary,#66737d);--ari-bg:var(--dsw-alias-bg-base,var(--background-color,Canvas));--ari-surface:var(--dsw-alias-bg-elevated,var(--ari-bg));--ari-line:var(--dsw-alias-border-l2,var(--border-color,#89969b55));--ari-accent:#24858c;--ari-accent-soft:color-mix(in srgb,var(--ari-accent) 11%,var(--ari-bg));--ari-good:#29836b;--ari-warn:#a76d29;color:var(--ari-ink);background:var(--ari-bg);font:14px/1.5 var(--dsw-font-family,ui-sans-serif,system-ui,sans-serif);display:flex;flex-direction:column;height:100%;min-height:0;container-type:inline-size;overflow:hidden}
+.ari-app *{box-sizing:border-box}.ari-app button,.ari-app input,.ari-app select{font:inherit;color:inherit}.ari-app button{cursor:pointer}.ari-app button:disabled{opacity:.45;cursor:default}.ari-app button:not(.ari-nav-item):not(.ari-step):not(.ari-knowledge-row){border:1px solid var(--ari-line);border-radius:7px;background:transparent;padding:7px 11px}.ari-app button:hover:not(:disabled){border-color:var(--ari-accent);background:var(--ari-accent-soft)}.ari-app input,.ari-app select{border:1px solid var(--ari-line);border-radius:7px;background:var(--ari-bg);padding:8px 11px;min-height:37px}.ari-app :focus-visible{outline:2px solid var(--ari-accent);outline-offset:2px}.ari-app h2,.ari-app h3,.ari-app p{margin:0}.ari-app h2{font-size:24px;line-height:1.25;letter-spacing:-.035em}.ari-app h3{font-size:16px;line-height:1.4}.ari-app p{line-height:1.65}.ari-app small{font-size:12px;color:var(--ari-muted)}.ari-app pre{white-space:pre-wrap;overflow-wrap:anywhere}.ari-app summary{cursor:pointer}.ari-eyebrow{display:block;color:var(--ari-accent);font-size:11px;font-weight:700;letter-spacing:.13em;text-transform:uppercase;margin-bottom:5px}.ari-muted{color:var(--ari-muted)}
+.ari-app-header{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:12px 24px;border-bottom:1px solid var(--ari-line);min-height:66px;flex-shrink:0}.ari-brand{display:flex;align-items:center;min-width:0;gap:12px}.ari-brand-mark{display:grid;place-items:center;flex:none;width:35px;height:35px;color:#fff;background:var(--ari-accent);border-radius:9px;font:700 20px/1 Georgia,serif}.ari-brand>div{min-width:0}.ari-brand strong{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:15px;font-weight:650}.ari-header-state{display:flex;align-items:center;gap:13px;flex-shrink:0}.ari-chip{display:inline-flex;align-items:center;border:1px solid var(--ari-line);background:color-mix(in srgb,var(--ari-bg) 90%,var(--ari-muted));padding:2px 8px;border-radius:20px;font-size:12px;line-height:20px;white-space:nowrap}.ari-chip.ari-success{border-color:color-mix(in srgb,var(--ari-good) 50%,transparent);color:var(--ari-good);background:color-mix(in srgb,var(--ari-good) 8%,var(--ari-bg))}.ari-chip.ari-warning{color:var(--ari-warn);border-color:var(--ari-warn)}
+.ari-app-body{display:grid;grid-template-columns:172px minmax(0,1fr);min-height:0;flex:1}.ari-nav{display:flex;flex-direction:column;gap:3px;border-right:1px solid var(--ari-line);padding:19px 10px;background:color-mix(in srgb,var(--ari-bg) 96%,var(--ari-accent));min-width:0}.ari-nav-item{border:0;border-radius:7px;background:transparent;text-align:left;padding:10px 12px;color:var(--ari-muted);font-weight:550;white-space:nowrap}.ari-nav-item[aria-current=page]{background:var(--ari-accent-soft);color:var(--ari-accent);font-weight:700}.ari-nav-item:hover{color:var(--ari-ink);background:var(--ari-accent-soft)}.ari-main{position:relative;min-width:0;min-height:0;overflow:auto;scrollbar-gutter:stable;padding:24px 28px 36px}.ari-view{max-width:1180px;margin:0 auto;display:grid;gap:16px;min-width:0}.ari-view-heading{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:4px}.ari-view-heading>div:first-child{min-width:0}.ari-lead{font-size:16px;line-height:1.65;max-width:840px;color:var(--ari-ink)}.ari-callout{border-left:3px solid var(--ari-warn);background:color-mix(in srgb,var(--ari-warn) 7%,var(--ari-bg));padding:12px 16px}.ari-callout p{margin-top:4px;color:var(--ari-muted)}
+.ari-overview-grid{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(260px,1fr);gap:14px}.ari-panel,.ari-feature-file{border:1px solid var(--ari-line);background:var(--ari-surface);border-radius:10px;padding:18px 20px;min-width:0}.ari-panel>h3,.ari-feature-file h3{margin-bottom:11px}.ari-panel p+p{margin-top:7px}.ari-panel details{margin-top:10px}.ari-outcome{border-top:3px solid var(--ari-accent);display:flex;flex-direction:column;align-items:flex-start;gap:10px}.ari-outcome h3{font-size:21px;line-height:1.28;letter-spacing:-.025em}.ari-outcome>p{max-width:700px}.ari-outcome .ari-action-row{margin-top:auto}.ari-action-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.ari-app button.ari-primary{border-color:var(--ari-accent);background:var(--ari-accent);color:white;font-weight:650}.ari-app button.ari-primary:hover{background:color-mix(in srgb,var(--ari-accent) 85%,black)}.ari-delivery{display:flex;align-items:center;justify-content:space-between;gap:10px;border-top:1px solid var(--ari-line);padding:9px 0;margin-top:9px}.ari-delivery strong{min-width:0;overflow-wrap:anywhere}.ari-attention{border-color:var(--ari-warn)}
+.ari-app button.ari-primary:not(.ari-nav-item):not(.ari-step):not(.ari-knowledge-row){background:var(--ari-accent);border-color:var(--ari-accent);color:white}.ari-app button.ari-primary:not(.ari-nav-item):not(.ari-step):not(.ari-knowledge-row):hover{background:color-mix(in srgb,var(--ari-accent) 85%,black);color:white}
+.ari-section-head,.ari-metric-top,.ari-row-head{display:flex;align-items:center;justify-content:space-between;gap:10px}.ari-section-head{margin-bottom:12px}.ari-metric-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.ari-metric{border:1px solid var(--ari-line);background:var(--ari-bg);border-radius:8px;padding:14px;min-width:0}.ari-metric-top strong{font-size:14px}.ari-metric-values{display:flex;justify-content:space-between;gap:9px;margin:12px 0 9px;font-size:12px;color:var(--ari-muted);font-variant-numeric:tabular-nums}.ari-metric-values b{color:var(--ari-ink);font-size:18px;font-weight:700;margin-left:4px}.ari-compare{height:20px;display:grid;gap:3px;margin-bottom:7px}.ari-compare span{height:6px;border-radius:4px;display:block;min-width:2px}.ari-base-bar{background:color-mix(in srgb,var(--ari-muted) 65%,transparent)}.ari-current-bar{background:var(--ari-accent)}.ari-source{display:flex;gap:7px;align-items:center;margin-top:10px}.ari-app .ari-source button{font-size:12px;padding:4px 7px!important}.ari-metric small{display:block}.ari-feature-file{display:flex;align-items:center;justify-content:space-between;gap:15px;border-left:3px solid var(--ari-accent)}.ari-feature-file small{overflow-wrap:anywhere}
+.ari-filterbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}.ari-filterbar input{flex:1;min-width:170px}.ari-segmented{display:inline-flex;gap:2px;border:1px solid var(--ari-line);border-radius:8px;padding:3px}.ari-app .ari-segmented button,.ari-app .ari-detail-tabs button{border:0!important;border-radius:5px!important;padding:6px 11px!important;background:transparent}.ari-app .ari-segmented button[aria-pressed=true],.ari-app .ari-detail-tabs button[aria-pressed=true]{background:var(--ari-accent-soft);color:var(--ari-accent);font-weight:700}.ari-work-area{display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,34%);gap:14px;align-items:start;min-width:0}.ari-work-main{min-width:0}.ari-detail{min-width:0;border:1px solid var(--ari-line);border-radius:10px;background:var(--ari-surface);padding:18px;max-height:calc(100dvh - 190px);overflow:auto}.ari-detail-head{display:flex;justify-content:space-between;align-items:center;gap:8px;border-bottom:1px solid var(--ari-line);padding-bottom:10px}.ari-detail-tabs{display:flex;gap:3px;border-bottom:1px solid var(--ari-line);margin:10px 0 15px}.ari-detail h3{margin:16px 0 8px}.ari-detail p{margin:8px 0}.ari-detail .ari-chip{margin-top:4px}.ari-facts{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-size:12px}.ari-facts dt{color:var(--ari-muted)}.ari-facts dd{margin:0;overflow-wrap:anywhere}.ari-prose{white-space:pre-wrap;overflow-wrap:anywhere}.ari-history-link{display:block;margin:5px 0;text-align:left;width:100%;font-size:12px!important}.ari-ref{max-width:100%;overflow-wrap:anywhere;text-align:left;font-family:ui-monospace,SFMono-Regular,Menlo,monospace!important;font-size:12px!important}
+.ari-timeline{padding:0;margin:0;list-style:none;border-left:1px solid var(--ari-line);margin-left:25px}.ari-timeline li{position:relative;margin:0 0 7px;padding-left:19px}.ari-timeline li:before{content:'';position:absolute;left:-5px;top:22px;width:9px;height:9px;border-radius:50%;background:var(--ari-accent);box-shadow:0 0 0 3px var(--ari-bg)}.ari-app button.ari-step{width:100%;display:flex;align-items:center;gap:12px;text-align:left;border:1px solid var(--ari-line);background:var(--ari-surface);border-radius:8px;padding:13px 15px}.ari-app button.ari-step[aria-pressed=true]{border-color:var(--ari-accent);background:var(--ari-accent-soft)}.ari-step-marker{color:var(--ari-accent);font-size:13px;font-weight:700;font-variant-numeric:tabular-nums;flex:none}.ari-step-body{display:grid;gap:3px;min-width:0}.ari-step-body strong{font-size:14px}.ari-step-body>span{font-size:13px;color:var(--ari-muted);line-height:1.45}.ari-step-body small{font-size:12px}.ari-step-arrow{margin-left:auto;color:var(--ari-accent);font-size:17px}
+.ari-row-list{display:grid;gap:10px}.ari-row{border:1px solid var(--ari-line);background:var(--ari-surface);border-radius:8px;padding:14px 16px}.ari-row p{margin:8px 0}.ari-file-list{list-style:none;margin:10px 0 0;padding:0}.ari-file-list li{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 0;border-top:1px solid var(--ari-line);font-size:12px}.ari-file-list li>span{overflow-wrap:anywhere}.ari-file-list button{flex:none;font-size:12px!important;padding:4px 8px!important}.ari-knowledge-row{display:grid;gap:5px;width:100%;text-align:left;border:1px solid var(--ari-line);background:var(--ari-surface);border-radius:8px;padding:13px 15px;color:inherit}.ari-knowledge-row[aria-pressed=true]{border-color:var(--ari-accent);background:var(--ari-accent-soft)}.ari-knowledge-row>span:nth-child(2){font-size:13px;line-height:1.55}.ari-knowledge-row small{font-size:12px}.ari-maintenance-row{border-top:1px solid var(--ari-line);padding:9px 0}.ari-maintenance-row summary{font-size:13px}.ari-maintenance-row p{font-size:12px;margin:7px 0;overflow-wrap:anywhere}.ari-empty{padding:34px 16px;text-align:center;border:1px dashed var(--ari-line);border-radius:8px;color:var(--ari-muted)}.ari-alert,.ari-notice{padding:8px 16px;border-bottom:1px solid var(--ari-warn);background:color-mix(in srgb,var(--ari-warn) 8%,var(--ari-bg));font-size:13px}.ari-alert button,.ari-notice button{margin-left:12px}.ari-onboarding{max-width:580px;padding:40px 24px;margin:auto;display:grid;gap:12px;width:100%}.ari-onboarding input{width:100%}
+.ari-reader-backdrop{position:fixed;inset:0;z-index:1000;background:#14272b90;display:grid;place-items:center;padding:14px}.ari-reader{width:min(1000px,96vw);height:min(92dvh,1000px);overflow:auto;background:var(--ari-bg);color:var(--ari-ink);box-shadow:0 26px 90px #0005;border:1px solid var(--ari-line);border-radius:12px;padding:0 24px 24px}.ari-reader-head{display:flex;align-items:center;justify-content:space-between;gap:15px;position:sticky;top:0;background:var(--ari-bg);padding:18px 0;border-bottom:1px solid var(--ari-line);z-index:2}.ari-reader-head h2{font:600 15px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}.ari-reader>div:nth-child(2){padding-top:18px}.ari-reader-list{list-style:none;padding:0}.ari-reader-list li{display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--ari-line)}.ari-reader-list button{text-align:left;overflow-wrap:anywhere}.ari-reader-meta{border-top:1px solid var(--ari-line);padding-top:15px;margin-top:30px}.ari-reader-meta pre{font-size:11px;line-height:1.5}.ari-code{font:12px/1.65 ui-monospace,SFMono-Regular,Menlo,monospace;background:color-mix(in srgb,var(--ari-bg) 90%,var(--ari-muted));padding:18px;border-radius:7px;tab-size:2;overflow:auto}.ari-reader .markdown-body{line-height:1.75}
+.ari-revision-diff{margin:14px 0;border-top:1px solid var(--ari-line)}.ari-revision-diff pre{font:12px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;padding:10px;max-height:200px;overflow:auto}.ari-diff-old{background:color-mix(in srgb,#b15555 12%,var(--ari-bg))}.ari-diff-new{background:color-mix(in srgb,var(--ari-good) 12%,var(--ari-bg))}.ari-pointer{display:flex;align-items:center;gap:12px;flex-wrap:wrap;border:1px solid var(--ari-accent);border-radius:7px;background:var(--ari-accent-soft);padding:10px 12px;margin-bottom:15px;font-size:12px}.ari-pointer code{overflow-wrap:anywhere}.ari-pointer strong:last-child{margin-left:auto;font-size:15px;font-variant-numeric:tabular-nums}
+.ari-markdown{font-size:14px;line-height:1.75;overflow-wrap:anywhere}.ari-markdown>*+*{margin-top:15px!important}.ari-markdown h1,.ari-markdown h2,.ari-markdown h3,.ari-markdown h4{line-height:1.35;letter-spacing:0;padding-bottom:6px;border-bottom:1px solid var(--ari-line)}.ari-markdown h1{font-size:22px}.ari-markdown h2{font-size:19px}.ari-markdown h3{font-size:16px}.ari-markdown h4{font-size:14px}.ari-markdown p{line-height:1.75}.ari-markdown ul,.ari-markdown ol{padding-left:24px}.ari-markdown li{margin:5px 0}.ari-markdown code{font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;background:color-mix(in srgb,var(--ari-accent) 8%,var(--ari-bg));padding:1px 3px;border-radius:3px}.ari-markdown pre.ari-md-code{overflow:auto;white-space:pre;background:color-mix(in srgb,var(--ari-ink) 5%,var(--ari-bg));border:1px solid var(--ari-line);padding:15px;border-radius:7px}.ari-markdown pre code{padding:0;background:transparent}.ari-md-table-scroll{max-width:100%;overflow:auto}.ari-markdown table{border-collapse:collapse;width:100%;min-width:560px;font-size:13px}.ari-markdown th,.ari-markdown td{border:1px solid var(--ari-line);padding:8px 10px;text-align:left;vertical-align:top}.ari-markdown th{background:var(--ari-accent-soft);font-weight:650}.ari-markdown tr:nth-child(even){background:color-mix(in srgb,var(--ari-ink) 2%,var(--ari-bg))}.ari-markdown blockquote{margin-left:0;padding-left:14px;border-left:3px solid var(--ari-accent);color:var(--ari-muted)}.ari-markdown a{color:var(--ari-accent)}
+.ari-eyebrow,.ari-reader-meta pre{font-size:12px}
+html[style*="color-scheme: dark"] .ari-app{--ari-accent:#65c0c5;--ari-good:#70c5a7;--ari-warn:#e0ad6b}
+html[style*="color-scheme: dark"] .ari-app button.ari-primary:not(.ari-nav-item):not(.ari-step):not(.ari-knowledge-row){background:#237a80;border-color:#237a80;color:white}
+@container (max-width:1099px){.ari-work-area{display:block}.ari-detail{position:absolute;right:0;top:0;bottom:0;width:min(410px,95%);max-height:none;z-index:4;border-radius:0;box-shadow:-12px 0 35px #0002}.ari-overview-grid{grid-template-columns:1fr 1fr}}
+@container (max-width:649px){.ari-app-header{padding:9px 12px;min-height:57px}.ari-header-state small{display:none}.ari-app-body{display:flex;flex-direction:column}.ari-nav{flex-direction:row;overflow:auto;flex:none;border-right:0;border-bottom:1px solid var(--ari-line);padding:5px 7px}.ari-nav-item{font-size:12px;padding:7px 8px;flex:none}.ari-main{padding:16px 12px 28px;scrollbar-gutter:auto}.ari-view-heading{align-items:flex-start}.ari-view-heading h2{font-size:20px}.ari-overview-grid,.ari-metric-grid{grid-template-columns:1fr}.ari-filterbar input{width:100%;flex-basis:100%}.ari-detail{width:100%;box-shadow:none}.ari-reader{width:100%;height:100%;border-radius:0;padding:0 15px 20px}.ari-reader-backdrop{padding:0}.ari-feature-file{align-items:flex-start;flex-direction:column}}
+@media(prefers-reduced-motion:reduce){.ari-app *{animation:none!important;transition:none!important}}
+`;
+
+/** Small, safe Markdown fallback for DSH builds without a public MarkdownText export. */
+function renderResearchMarkdown(React, source) {
+  const h=React.createElement, lines=String(source??'').replace(/\r\n?/g,'\n').split('\n'), blocks=[];
+  const inline=value=>String(value).split(/(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\)|\*[^*]+\*)/g).filter(Boolean).map((part,index)=>{
+    if(part.startsWith('**')&&part.endsWith('**'))return h('strong',{key:index},part.slice(2,-2));
+    if(part.startsWith('`')&&part.endsWith('`'))return h('code',{key:index},part.slice(1,-1));
+    if(part.startsWith('*')&&part.endsWith('*'))return h('em',{key:index},part.slice(1,-1));
+    const link=part.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+    if(link&&/^https?:\/\//i.test(link[2]))return h('a',{key:index,href:link[2],target:'_blank',rel:'noopener noreferrer'},link[1]);
+    return part;
+  });
+  const cells=line=>line.trim().replace(/^\||\|$/g,'').split('|').map(cell=>cell.trim());
+  const tableRule=line=>/^\s*\|?\s*:?-{3,}:?(?:\s*\|\s*:?-{3,}:?)+\s*\|?\s*$/.test(line);
+  const bullet=line=>/^\s*(?:[-*+] |\d+\. )/.test(line);
+  const special=line=>/^\s*(?:#{1,6} |```|> |---+\s*$)/.test(line)||bullet(line);
+  for(let i=0;i<lines.length;){
+    const line=lines[i],key=`block-${i}`;
+    if(!line.trim()){i++;continue;}
+    if(line.trimStart().startsWith('```')){
+      const lang=line.trim().slice(3),code=[];i++;
+      while(i<lines.length&&!lines[i].trimStart().startsWith('```'))code.push(lines[i++]);
+      if(i<lines.length)i++;
+      blocks.push(h('pre',{key,className:'ari-md-code'},h('code',{'data-language':lang},code.join('\n'))));continue;
+    }
+    const heading=line.match(/^\s*(#{1,6})\s+(.+)$/);
+    if(heading){blocks.push(h(`h${Math.min(heading[1].length,4)}`,{key},...inline(heading[2])));i++;continue;}
+    if(/^\s*---+\s*$/.test(line)){blocks.push(h('hr',{key}));i++;continue;}
+    if(line.includes('|')&&i+1<lines.length&&tableRule(lines[i+1])){
+      const headers=cells(line),rows=[];i+=2;
+      while(i<lines.length&&lines[i].includes('|')&&lines[i].trim())rows.push(cells(lines[i++]));
+      const head=h('thead',null,h('tr',null,...headers.map((cell,j)=>h('th',{key:j},...inline(cell)))));
+      const body=h('tbody',null,...rows.map((row,j)=>h('tr',{key:j},...row.map((cell,k)=>h('td',{key:k},...inline(cell))))));
+      blocks.push(h('div',{key,className:'ari-md-table-scroll'},h('table',null,head,body)));continue;
+    }
+    if(bullet(line)){
+      const ordered=/^\s*\d+\. /.test(line),items=[];
+      while(i<lines.length&&bullet(lines[i])&&(/^\s*\d+\. /.test(lines[i])===ordered))items.push(lines[i++].replace(/^\s*(?:[-*+] |\d+\. )/,''));
+      blocks.push(h(ordered?'ol':'ul',{key},...items.map((item,j)=>h('li',{key:j},...inline(item)))));continue;
+    }
+    if(/^\s*> /.test(line)){
+      const quote=[];while(i<lines.length&&/^\s*> /.test(lines[i]))quote.push(lines[i++].replace(/^\s*> /,''));
+      blocks.push(h('blockquote',{key},...inline(quote.join(' '))));continue;
+    }
+    const paragraph=[line.trim()];i++;
+    while(i<lines.length&&lines[i].trim()&&!special(lines[i])&&!(i+1<lines.length&&tableRule(lines[i+1])))paragraph.push(lines[i++].trim());
+    blocks.push(h('p',{key},...inline(paragraph.join(' '))));
+  }
+  return h('article',{className:'ari-markdown'},...blocks);
+}
+
+/** Research 0.6.10: a navigable, read-only-first view of the native ledger. */
+
+function createResearchWorkbench(React, rpc, openSession, projectGraph, ResearchGraph, MarkdownText, researchStyles) {
+  const h=React.createElement;
+  const NAV=[['overview','成果概览'],['process','研究过程'],['knowledge','成果与知识'],['materials','材料'],['runtime','运行与维护']];
+  const runNames={manual:'待开始',running:'正在研究',paused:'已暂停',stopping:'正在停止',unverified:'停止待核实',stopped:'已停止',complete:'目标已结束',cold:'等待显式恢复'};
+  const text=value=>typeof value==='string'?value:value?.preview??'';
+  const brief=(value,max=170)=>{const s=text(value).replace(/\s+/g,' ').trim();return s.length>max?s.slice(0,max)+'…':s;};
+  const format=value=>typeof value==='number'?(Math.abs(value)<.01?value.toFixed(5):value.toFixed(4)): '—';
+  const label=(textValue,tone='muted')=>h('span',{className:`ari-chip ari-${tone}`},textValue);
+  const button=(title,fn,props={})=>h('button',{type:'button',onClick:fn,...props},title);
+  const fmtDate=value=>value?new Date(value).toLocaleString():'未记录';
+  const materialKind=item=>item.kind==='report'||item.source_path?.toLowerCase().endsWith('.md')?'reports':
+    item.kind==='software'?'deliverables':
+    item.source_path?.toLowerCase().endsWith('.py')?'code':'results';
+  function changeBlocks(oldText,newText) {
+    const before=text(oldText).split('\n'),after=text(newText).split('\n');
+    let start=0,end=0;
+    while(start<before.length&&start<after.length&&before[start]===after[start])start++;
+    while(end<before.length-start&&end<after.length-start&&before[before.length-1-end]===after[after.length-1-end])end++;
+    return {removed:before.slice(start,before.length-end).join('\n'),added:after.slice(start,after.length-end).join('\n')};
+  }
+  function jsonPointer(document,pointer) {
+    try {return pointer.slice(1).split('/').reduce((value,key)=>value[key.replace(/~1/g,'/').replace(/~0/g,'~')],document);}catch{return undefined;}
+  }
+  function markdown(value) {
+    return renderResearchMarkdown(React,value);
+  }
+  function LinkRef({value,onOpen}) {return button(value,()=>onOpen(value),{className:'ari-ref'});}
+
   return function Workbench({sessionId}) {
-    const [state,setState]=React.useState(null),[error,setError]=React.useState(null),[notice,setNotice]=React.useState(null);
-    const [preview,setPreview]=React.useState(null),[referencePreview,setReferencePreview]=React.useState(null);
-    const [goal,setGoal]=React.useState(''),[busy,setBusy]=React.useState(false),[updated,setUpdated]=React.useState(null);
-    const [knowledgeSearch,setKnowledgeSearch]=React.useState(''),[guidancePath,setGuidancePath]=React.useState(''),[guidanceVersion,setGuidanceVersion]=React.useState('');
-    const [selected,setSelected]=React.useState(null),[edgeId,setEdgeId]=React.useState(null),[search,setSearch]=React.useState(''),[filter,setFilter]=React.useState('all');
-    const [view,setView]=React.useState(()=>window.matchMedia('(max-width:600px)').matches?'list':'graph');
-    const hintOffset=React.useRef(0);
-    const lifecycle=React.useRef(0),requestSeq=React.useRef(0),pending=React.useRef(false),lastState=React.useRef(null);
+    const [summary,setSummary]=React.useState(null),[presentation,setPresentation]=React.useState(null);
+    const [section,setSection]=React.useState('overview'),[error,setError]=React.useState(''),[notice,setNotice]=React.useState('');
+    const [pages,setPages]=React.useState({}),[knowledge,setKnowledge]=React.useState(null),[knowledgeFilters,setKnowledgeFilters]=React.useState({query:'',kind:'',status:'',nodeId:''});
+    const [selectedNode,setSelectedNode]=React.useState(null),[nodeDetail,setNodeDetail]=React.useState(null),[nodePubs,setNodePubs]=React.useState([]),[nodeAttempts,setNodeAttempts]=React.useState([]),[detailTab,setDetailTab]=React.useState('result');
+    const [selectedKnowledge,setSelectedKnowledge]=React.useState(null),[knowledgeDetail,setKnowledgeDetail]=React.useState(null),[knowledgeHistory,setKnowledgeHistory]=React.useState(null),[knowledgeLatest,setKnowledgeLatest]=React.useState(null);
+    const [reader,setReader]=React.useState(null),[graphMode,setGraphMode]=React.useState(false),[graphData,setGraphData]=React.useState(null);
+    const [search,setSearch]=React.useState(''),[statusFilter,setStatusFilter]=React.useState('all'),[busy,setBusy]=React.useState(false),[goal,setGoal]=React.useState('');
+    const [maintenanceTab,setMaintenanceTab]=React.useState('current'),[materialFilter,setMaterialFilter]=React.useState('all'),[hintKind,setHintKind]=React.useState('');
+    const [restorePreview,setRestorePreview]=React.useState(null),[guidance,setGuidance]=React.useState(null),[guidancePath,setGuidancePath]=React.useState(''),[guidanceVersion,setGuidanceVersion]=React.useState('');
+    const lifecycle=React.useRef(0),pollSeq=React.useRef(0),readerSeq=React.useRef(0),selectionSeq=React.useRef(0),knowledgeSeq=React.useRef(0),pageSeq=React.useRef({}),pending=React.useRef(false);
+    const scrollRef=React.useRef(null),scrollMemory=React.useRef({}),focusBeforeReader=React.useRef(null),scrollBeforeReader=React.useRef(0);
+    function detailOverlayStyle() {
+      const main=scrollRef.current;
+      if(!main||typeof window==='undefined'||main.clientWidth>=1100)return undefined;
+      const rect=main.getBoundingClientRect();
+      return {position:'fixed',top:rect.top,right:window.innerWidth-rect.right,
+        bottom:window.innerHeight-rect.bottom,width:main.clientWidth<650?rect.width:Math.min(410,rect.width)};
+    }
     const call=React.useCallback(async(endpoint,payload={})=>{
       const response=await rpc(endpoint,{sessionId,operationId:`${sessionId}:ui:${crypto.randomUUID()}`,...payload});
       if(!response.ok)throw new Error(response.error?.message??'请求失败');
       return response.value;
     },[sessionId]);
-    const loadCollection=React.useCallback(async collection=>{
-      const items=[];let cursor={};
-      do{const page=await call('history.page',{collection,cursor,limit:200});items.push(...page.items);cursor=page.cursor??null;}while(cursor);
-      return items;
-    },[call]);
     const refresh=React.useCallback(async()=>{
-      const life=lifecycle.current,seq=++requestSeq.current;
-      try {
-        const [summary,contextPreview,guidance]=await Promise.all([call('query'),call('context.preview'),call('guidance.status')]),previous=lastState.current;
-        const collections=['nodes','relations','dependencies','consumptions','usage_gaps','legacy_refs','attempts','publications','notes','snapshots','restorations','associations','knowledge','impacts','checkpoints','review_todos','specialists','sessions','tasks'];
-        const loaded=await Promise.all(collections.map(async name=>{
-          if(!['nodes','attempts','impacts','review_todos','specialists','sessions','tasks'].includes(name)&&previous&&previous.counts?.[name]===summary.counts?.[name]&&previous[name])return[name,previous[name]];
-          return[name,await loadCollection(name)];
-        }));
-        const initialHints=summary.structure_hints??{items:[],total:0,shown_count:0,offset:0,next_offset:null};
-        const offset=Math.min(hintOffset.current,Math.floor(Math.max(0,initialHints.total-1)/8)*8);
-        const hints=offset?await call('history.page',{collection:'hints',cursor:{offset},limit:8}):initialHints;
-        const value={...summary,...Object.fromEntries(loaded),structure_hints:hints,context_preview:contextPreview,guidance};
-        if(life!==lifecycle.current||seq!==requestSeq.current)return;
-        hintOffset.current=offset;lastState.current=value;setState(value);setError(null);setUpdated(new Date());
-      }
-      catch(e){if(life===lifecycle.current&&seq===requestSeq.current)setError(e.message);}
-    },[call,loadCollection]);
+      const seq=++pollSeq.current,life=lifecycle.current;
+      try {const value=await call('workbench.summary');if(life!==lifecycle.current||seq!==pollSeq.current)return;setSummary(old=>old?.revision===value.revision&&old?.runtime?.state===value.runtime?.state&&old?.runtime?.pending_approvals===value.runtime?.pending_approvals?old:value);setError('');}
+      catch(e){if(life===lifecycle.current&&seq===pollSeq.current)setError(e.message);}
+    },[call]);
     React.useEffect(()=>{
       lifecycle.current++;let active=true,timer;
-      const poll=async()=>{await refresh();if(active)timer=setTimeout(poll,3000);};poll();
-      return()=>{active=false;lifecycle.current++;clearTimeout(timer);};
+      const poll=async()=>{if(!document.hidden)await refresh();if(active)timer=setTimeout(poll,3000);};
+      poll();const visible=()=>{if(!document.hidden)refresh();};document.addEventListener('visibilitychange',visible);
+      return()=>{active=false;lifecycle.current++;readerSeq.current++;selectionSeq.current++;clearTimeout(timer);document.removeEventListener('visibilitychange',visible);};
     },[refresh]);
-    const model=React.useMemo(()=>projectGraph(state??{}),[state]);
-    const term=search.trim().toLocaleLowerCase();
-    const visibleIds=new Set(model.nodes.filter(n=>(filter==='all'||n.status===filter)&&(!term||`${n.node_id} ${n.question} ${n.plan} ${n.why_now}`.toLocaleLowerCase().includes(term))).map(n=>n.node_id));
-    const chosen=model.nodes.find(n=>n.node_id===selected), edge=model.edges.find(e=>e.id===edgeId);
-    const runtime=state?.runtime, runState=runtime?.state??'cold';
-    const roles={main:'研究主会话',node_core:'节点核心 Agent',exploration:'历史探索会话',discussion:'讨论会话',handoff:'接手会话',specialist:'节点专家',legacy:'历史会话'};
-    const runLabels={manual:'尚未开始',running:'自主推进中',paused:'自主推进已暂停',stopping:'停止处理中',unverified:'停止待核实',stopped:'已停止',complete:'自主目标已结束',cold:'重启后等待显式恢复'};
-    const reasons={project:'项目暂停',project_wait:'项目暂停（等待探索）',human:'人工介入',wait:'等待探索进展',native_stop:'原生停止',host_limit:'宿主限制',fault:'执行故障',cold:'重启未恢复',complete:'目标已完成',finished:'历史工作段已结束',segment_complete:'工作段已核实结束',stop:'停止处理中',unverified:'待核实',legacy_history:'历史探索（不加入自主调度）'};
-    const sessionCards=(state?.sessions??[]).map(saved=>({...saved,...(runtime?.sessions??[]).find(live=>live.session_id===saved.session_id)}));
-    const blockedCreations=(state?.tasks??state?.workflow?.tasks??[]).filter(t=>t.state==='unverified'&&!(state?.sessions??[]).some(s=>s.session_id===t.session_id));
-    const knowledgeTerm=knowledgeSearch.trim().toLocaleLowerCase();
-    const knowledgeRows=(state?.knowledge??[]).filter(item=>!knowledgeTerm||`${item.ref} ${item.kind} ${typeof item.statement==='string'?item.statement:item.statement?.preview??''} ${JSON.stringify(item.conditions)}`.toLocaleLowerCase().includes(knowledgeTerm));
-    const disabled=busy||!!error||!state;
-    async function act(endpoint,payload={}) {
-      if(pending.current||error)return;
-      pending.current=true;setBusy(true);setNotice(null);const life=lifecycle.current;
-      try {const value=await call(endpoint,payload);if(life!==lifecycle.current)return;if(endpoint==='restore.preview')setPreview(value);setNotice(value?.message??'操作已完成');if(value?.sessionId)await navigate(value.sessionId);await refresh();}
-      catch(e){if(life===lifecycle.current)setNotice(`操作失败：${e.message}`);}
-      finally{if(life===lifecycle.current){pending.current=false;setBusy(false);}}
+    React.useEffect(()=>{if(!summary)return;let live=true;call('presentation.get').then(value=>{if(live)setPresentation(value);}).catch(e=>{if(live)setPresentation({status:'invalid',message:e.message});});return()=>{live=false;};},[call,summary?.project?.project_id,summary?.final_publication?.publication_id]);
+
+    async function loadPage(collection,{more=false,nodeId=null,limit=20,kind=null}={}) {
+      const key=nodeId?`${collection}:${nodeId}`:collection,previous=pages[key];
+      if(more&&!previous?.cursor)return;
+      const sequence=(pageSeq.current[key]??0)+1;pageSeq.current[key]=sequence;
+      const next=await call('workbench.page',{collection,cursor:more?previous.cursor:undefined,limit,nodeId,kind});
+      if(pageSeq.current[key]!==sequence)return;
+      setPages(current=>({...current,[key]:more?{...next,items:[...(current[key]?.items??[]),...next.items]}:next}));
+      return next;
     }
-    async function navigate(id){try{await openSession(id);}catch(e){setNotice(`无法打开原生会话：${e.message}`);}}
-    async function inspectReference(ref){setReferencePreview(null);try{setReferencePreview(await call('reference.get',{ref}));}catch(e){setNotice(`无法读取研究材料：${e.message}`);}}
-    const select=id=>{setSelected(id);setEdgeId(null);};
-    const btn=(label,endpoint,payload={},off=disabled)=>h('button',{disabled:off,onClick:()=>act(endpoint,payload)},label);
-    return h('div',{className:'ari-v5','aria-busy':busy},h('style',null,researchStyles),
-      h('header',{className:'ari-header'},h('div',{className:'ari-overline'},'RESEARCH / 研究工作台'),h('h2',null,state?.project.goal??'关联研究项目'),
-        state&&h(React.Fragment,null,h('div',{className:'ari-stats'},
-          h('span',null,h('strong',null,model.nodes.length),'研究节点'),h('span',null,h('strong',null,runtime?.running_count??'未知'),'实际运行会话'),
-          h('span',null,h('strong',null,runtime?.waiting_approval_count??0),'等待审批'),
-          h('span',null,h('strong',null,runtime?.specialist_count??0),'运行中专家'),
-          h('span',null,h('strong',null,state.review_queue?.pending_total??'未知'),'待整理'),
-          h('span',null,h('strong',null,Number(state.usage.known).toLocaleString()),'已记录 token'),h('span',null,h('strong',null,state.usage.missing??state.usage.unknown_count),'缺失请求')),
-          h('p',null,`项目推进：${runLabels[runState]??runState} · 待审批：${runtime?.pending_approvals??'未知'}`),
-          blockedCreations.length>0&&h('p',{role:'alert'},`需要处理：${blockedCreations.length} 个探索任务的创建结果尚未核实，保留 ${blockedCreations.length} 个研究槽位，其他任务可能排队。请在“探索任务与恢复”核实并重试；停止项目后也可使用“核实停止”。`),
-          runtime?.main_session_id&&h('button',{onClick:()=>navigate(runtime.main_session_id)},'打开研究主会话'),
-          h('p',null,`当前浏览会话：${roles[runtime?.current?.role]??'未知'} · ${runtime?.current?.native_status??'未知'} · ${reasons[runtime?.current?.pause_reason]??runtime?.current?.pause_reason??'无暂停'}`),
-          h('p',null,`用量：实际 ${state.usage.actual??0} · 估算 ${state.usage.estimated??0} · 进行中 ${state.usage.in_progress??0} · 覆盖缺口 ${state.usage.coverage_incomplete??0} · 讨论 ${state.usage.discussion??0} token；只监控，无费用上限。`),
-          h('div',{className:'ari-actions'},
-            ['manual','stopped','complete'].includes(runState)&&btn(runState==='manual'?'开始自主研究':'再次开始研究','auto'),
-            runState==='running'&&btn('暂停自主研究','pause'),
-            ['paused','cold'].includes(runState)&&btn('继续自主研究','resume'),
-            ['running','paused','cold','stopping'].includes(runState)&&btn('停止研究','stop'),
-            runState==='unverified'&&btn('重新核实停止','verify-stop')))),
-      (runtime?.approvals??[]).length>0&&h('section',{className:'ari-section','aria-label':'待审批'},h('h3',null,'等待原生审批'),
-        ...(runtime.approvals??[]).map(a=>h('article',{key:`${a.session_id}:${a.approval_id}`},
-          h('strong',null,`${a.node_id??'项目规划'} · 等待审批`),h('p',null,a.reason??'未提供原因'),
-          h('small',null,`${a.approval_id}${a.asked_at?` · 自 ${new Date(a.asked_at).toLocaleString()} 起`:''}`),
-          h('button',{onClick:()=>navigate(a.session_id)},'打开审批会话')))),
-      error&&h('div',{className:'ari-alert',role:'alert'},state?'连接异常，保留最后成功数据。':'暂时无法读取项目。',` ${error}`,h('button',{onClick:refresh},'重试')),
-      notice&&h('p',{role:'status'},notice),
-      referencePreview&&h('section',{className:'ari-section','aria-label':'研究材料','data-resolution-outcome':referencePreview.resolution?.outcome,'data-resolution-reason':referencePreview.resolution?.reason,role:referencePreview.resolution&&referencePreview.resolution.outcome!=='resolved'?'alert':undefined},h('h3',null,referencePreview.resolution&&referencePreview.resolution.outcome!=='resolved'?`材料不可打开：${referencePreview.resolution.reason}`:'研究材料'),h('pre',null,JSON.stringify(referencePreview,null,2)),h('button',{onClick:()=>setReferencePreview(null)},'关闭材料')),
-      preview&&h('section',{className:'ari-section','aria-label':'接手预览'},h('h3',null,'历史文件快照 · 接手预览'),
-        h('p',null,`来源：${preview.context.source_attempt_id} · 目标目录：${preview.workspace}`),
-        h('pre',null,JSON.stringify(preview.context,null,2)),h('p',null,`未完整保存：${preview.missing.length} 项`),
-        !preview.eligible&&h('p',{role:'alert'},'来源执行仍在进行或待核实，暂不能创建接手会话'),
-        btn('从此版本创建接手会话','restore.create',{snapshotId:preview.snapshot_id,previewId:preview.preview_id},disabled||!preview.eligible),
-        h('button',{onClick:()=>setPreview(null)},'关闭预览')),
-      !state?h('section',{className:'ari-section'},h('p',null,'初始化与关联不调用模型。项目目录采用当前 DSH 会话工作目录。'),
-        h('input',{'aria-label':'研究目标',placeholder:'研究目标',value:goal,onChange:e=>setGoal(e.target.value)}),
-        h('button',{disabled:busy||!goal.trim(),onClick:async()=>{setError(null);pending.current=false;try{setBusy(true);await call('open',{goal});await refresh();}catch(e){setNotice(e.message);}finally{setBusy(false);}}},'新建并关联'),
-        h('button',{disabled:busy,onClick:async()=>{try{setBusy(true);await call('open');await refresh();}catch(e){setNotice(e.message);}finally{setBusy(false);}}},'关联已有项目')):
-      h(React.Fragment,null,
-        h('div',{className:'ari-toolbar'},h('h3',null,'研究图'),h('input',{'aria-label':'搜索研究节点',placeholder:'搜索节点、问题或计划…',value:search,onChange:e=>setSearch(e.target.value)}),
-          h('select',{'aria-label':'筛选节点状态',value:filter,onChange:e=>setFilter(e.target.value)},...['all',...new Set(model.nodes.map(n=>n.status))].map(s=>h('option',{key:s,value:s},s==='all'?'全部状态':s))),
-          h('button',{'aria-pressed':view==='graph',onClick:()=>setView('graph')},'图'),h('button',{'aria-pressed':view==='list',onClick:()=>setView('list')},'列表'),
-          h('small',{className:'ari-updated'},updated?`更新于 ${updated.toLocaleTimeString()}`:'正在读取')),
-        h('div',{className:'ari-layout'},h('div',null,
-          h('div',{style:{display:view==='graph'?'block':'none'}},h(ResearchGraph,{model,visibleIds,selected,onSelect:select,onEdge:e=>setEdgeId(e.id),focused:state.attempt?.node_id})),
-          view==='list'&&h('ul',{className:'ari-list','aria-label':'研究节点列表'},...model.nodes.filter(n=>visibleIds.has(n.node_id)).map(n=>h('li',{key:n.node_id},h('button',{'aria-pressed':selected===n.node_id,onClick:()=>select(n.node_id)},
-            h('strong',null,`${n.node_id} · ${n.status}${state.attempt?.node_id===n.node_id?' · 当前执行节点':''}`),h('span',null,n.question),h('small',null,`${n.origin_class} · ${n.strategy??'continue'} · ${n.attempts.length} 工作段 · ${n.publications.length} 发布`))))),
-          view==='list'&&!visibleIds.size&&h('p',{className:'ari-empty'},'没有匹配的研究节点。')),
-          h(Details,{node:chosen,edge,state,act,disabled,onSession:navigate,onClose:()=>{setSelected(null);setEdgeId(null);}})),
-        h('details',{className:'ari-section',open:true},h('summary',null,`项目规划与未归属材料 · ${model.planning.attempts.length} 工作段 · ${model.planning.publications.length} 发布`),
-          h('p',null,'这些记录没有明确的节点归属，保留原始记录。工作段“未结束”不代表原生会话正在运行。'),
-          h(Records,{group:model.planning,state,onSession:navigate,onRestore:snapshotId=>act('restore.preview',{snapshotId}),disabled})),
-        h('details',{className:'ari-section',open:true},h('summary',null,`项目知识与未决问题 · ${state.knowledge.length}`),
-          h('input',{'aria-label':'搜索项目知识',placeholder:'搜索主张、条件、引用…',value:knowledgeSearch,onChange:e=>setKnowledgeSearch(e.target.value)}),
-          ...knowledgeRows.map(item=>h('article',{key:item.ref},h('strong',null,`${item.ref} · ${item.kind} · ${item.status}`),
-            h('p',{className:'ari-preserve'},typeof item.statement==='string'?item.statement:item.statement?.preview),
-            h('p',null,h('strong',null,'证据引用：'),item.evidence_refs?.length?item.evidence_refs.map(ref=>h('button',{key:ref,onClick:()=>inspectReference(ref)},ref)):'未关联证据'),
-            ...(item.field_checks??[]).map((check,index)=>h('p',{key:`field-check-${index}`},
-              h('strong',null,'字段检查：'),JSON.stringify(check.spec),' · ',
-              check.result==='consistent'?'声明字段与冻结文件一致':
-                check.result==='inconsistent'?`声明字段与冻结文件不一致 · 实际读值：${check.observed_text}`:
-                  `无法检查：${check.reason}`)),
-            h('p',null,h('strong',null,'记账来源：'),item.asserted_at?JSON.stringify(item.asserted_at):'历史记录，无来源'),
-            ...(item.execution_refs??[]).map((ref,index)=>h('p',{key:`execution-${index}`},`执行来源：${ref.ref} · ${ref.status==='linked'?'已关联':`未关联 · ${ref.reason}`}`)),
-            h('p',null,h('strong',null,'自述来源：'),item.source_identity&&Object.keys(item.source_identity).length?JSON.stringify(item.source_identity):'未填写',item.source_identity?.session_id&&h('button',{onClick:()=>navigate(item.source_identity.session_id)},'打开来源会话')),
-            h('p',null,h('strong',null,'适用范围：'),item.scope&&Object.keys(item.scope).length?JSON.stringify(item.scope):'未填写'),
-            h('p',null,h('strong',null,'适用条件：'),item.conditions&&Object.keys(item.conditions).length?JSON.stringify(item.conditions):'未填写'),
-            item.supersedes?.length>0&&h('p',null,h('strong',null,'修订历史：'),...item.supersedes.map(ref=>h('button',{key:ref,onClick:()=>inspectReference(ref)},ref))))),
-          !knowledgeRows.length&&h('p',{className:'ari-empty'},'没有匹配的知识条目。')),
-        h('details',{className:'ari-section',open:true,'aria-label':'结构候选提示'},h('summary',null,`结构候选提示 · 显示 ${state.structure_hints.shown_count} / ${state.structure_hints.total}`),
-          h('p',null,'这些线索仅供复核，不会自动补边或阻止研究。'),
-          ...state.structure_hints.items.map((item,index)=>h('article',{key:index},
-            h('strong',null,`候选 · ${item.target}`),
-            h('p',null,({prose_mention_without_relation:'正文提及尚无结构关联',whole_snapshot_evidence:'证据指向整份快照',lineage_mention_without_predecessor:'提及其他节点但未声明前驱',complete_publication_cites_risk:'完整发布仍引用有风险的依据'})[item.class]),
-            h('p',null,JSON.stringify(item.evidence)),
-            h('p',null,`修复记录：${item.repair_evidence.length?item.repair_evidence.join('、'):'无'}`))),
-          h('button',{disabled:disabled||hintOffset.current===0,onClick:()=>{hintOffset.current=Math.max(0,hintOffset.current-8);return refresh();}},'上一页'),
-          h('button',{disabled:disabled||state.structure_hints.next_offset==null,onClick:()=>{hintOffset.current=state.structure_hints.next_offset;return refresh();}},'下一页')),
-        h('details',{className:'ari-section'},h('summary',null,`节点检查点 · ${state.checkpoints.length}`),...state.checkpoints.map(item=>h('article',{key:item.checkpoint_id},h('strong',null,`${item.node_id??'项目规划'} · revision ${item.revision}`),h('pre',null,JSON.stringify(item.state,null,2))))),
-        h('details',{className:'ari-section'},h('summary',null,`整理与复核待办 · ${(state.review_todos??[]).filter(item=>item.state!=='completed').length}`),...(state.review_todos??[]).filter(item=>item.state!=='completed').map(item=>h('p',{key:item.todo_id},`${item.todo_id} · ${item.node_id??'项目规划'} · ${item.trigger_kind} · ${item.trigger_ref} · ${item.state}`))),
-        h('details',{className:'ari-section'},h('summary',null,`当前上下文来源 · ${state.context_preview.status}`),h('p',null,`摘要：${state.context_preview.source_digest??'无'} · ${state.context_preview.truncated?'已按内容块裁剪':'完整'}`),state.context_preview.error&&h('p',{role:'alert'},state.context_preview.error),h('pre',null,state.context_preview.text)),
-        h('details',{className:'ari-section',open:true},h('summary',null,`项目会话 · ${sessionCards.length}`),...sessionCards.map(s=>h('article',{key:s.session_id},
-          h('strong',null,`${s.detached?'历史会话':roles[s.role]} · ${s.node_id??'项目规划'}`),h('p',null,`${s.name??s.session_id} · ${s.native_status??'未加载'} · ${reasons[s.pause_reason]??s.pause_reason??'无暂停'}`),
-          h('p',null,s.cwd??'目录未知'),h('button',{onClick:()=>navigate(s.session_id)},'打开会话'),
-          s.pending_approvals>0&&h('p',{role:'status'},`等待审批 · ${s.approvals?.[0]?.reason??'未提供原因'}`),
-          ['human','native_stop','finished','segment_complete','complete'].includes(s.pause_reason)&&h('button',{disabled,onClick:()=>act('resume',{targetSessionId:s.session_id})},'继续此会话'),
-          ['requested','unverified'].includes(s.close_state)&&h('button',{disabled,onClick:()=>act('verify-close',{targetSessionId:s.session_id})},'核实工作段收尾'),
-          ['fault','host_limit','unverified'].includes(s.pause_reason)&&h('button',{disabled,onClick:()=>act('retry',{targetSessionId:s.session_id})},'核实并重试'),
-          h('details',null,h('summary',null,'关联历史与原生状态'),h('pre',null,JSON.stringify({goal:s.goal,jobs:s.jobs,intervals:state.associations.filter(a=>a.session_id===s.session_id)},null,2)))))),
-        h('details',{className:'ari-section'},h('summary',null,`节点内部协作 · ${(state.specialists??[]).length}`),...(state.specialists??[]).map(s=>h('article',{key:s.task_id},h('strong',null,`${s.task_id} · ${s.purpose} · ${s.state}`),h('p',null,`${s.label} · ${s.node_id??'项目规划'} · ${s.context_mode==='blind'?'盲评：仅分配材料':'研究背景'}`),s.child_session_id&&h('button',{onClick:()=>navigate(s.child_session_id)},'打开专家会话'),(['running','unverified'].includes(s.state)||!s.exit_verified)&&h('button',{disabled,onClick:()=>act('verify-specialist',{taskId:s.task_id})},'核实专家退出'),s.error&&h('p',{role:'alert'},s.error)))),
-        h('details',{className:'ari-section',open:blockedCreations.length>0},h('summary',null,'探索任务与恢复'),...(state.tasks??state.workflow?.tasks??[]).map(t=>h('article',{key:t.task_id},h('p',null,`${t.task_id} · ${t.node_id} · ${t.state}${t.error?' · '+t.error:''}`),blockedCreations.some(b=>b.task_id===t.task_id)&&h('p',null,'需要处理：创建结果待核实，保留 1 个研究槽位；未确认前不会自动重新创建。'),t.state==='unverified'&&h('button',{disabled,onClick:()=>act('verify-task',{taskId:t.task_id})},'核实是否未启动'),['failed','unverified'].includes(t.state)&&h('button',{disabled,onClick:()=>act('retry',{taskId:t.task_id})},'核实并重试创建')))),
-        h('details',{className:'ari-section'},h('summary',null,'高级设置'),
-          h('p',null,'科研指导按内容版本登记，只在相关任务上下文中取用方法卡。'),
-          state.guidance&&h('p',null,`当前指导：${state.guidance.path} · ${state.guidance.version} · ${state.guidance.content_hash}`),
-          h('input',{'aria-label':'科研指导文档路径',placeholder:'科研指导 Markdown 的绝对路径',value:guidancePath,onChange:e=>setGuidancePath(e.target.value)}),
+    async function loadKnowledge(more=false) {
+      if(more&&!knowledge?.cursor)return;
+      const seq=++knowledgeSeq.current;
+      const next=await call('knowledge.page',{...knowledgeFilters,cursor:more?knowledge.cursor:undefined,limit:20});
+      if(seq===knowledgeSeq.current)setKnowledge(current=>more?{...next,items:[...(current?.items??[]),...next.items]}:next);
+    }
+    React.useEffect(()=>{if(!summary)return;let live=true;const revision=summary.revision;
+      const run=async()=>{try {
+        if(section==='process')await loadPage('nodes');
+        if(section==='materials')await loadPage('publications');
+        if(section==='knowledge')await Promise.all([loadKnowledge(),loadPage('nodes')]);
+        if(section==='runtime')await Promise.all(['sessions','tasks','review_todos','hints','specialists','checkpoints','snapshots','restorations'].map(collection=>loadPage(collection,{limit:collection==='hints'?8:20,kind:collection==='hints'?hintKind:null})));
+        if(section==='overview'&&!presentation?.value?.report_ref)await loadPage('publications');
+      } catch(e){if(live)setNotice(`无法读取${NAV.find(n=>n[0]===section)?.[1]}：${e.message}`);}};run();
+      return()=>{live=false;};
+    },[section,summary?.revision,knowledgeFilters.query,knowledgeFilters.kind,knowledgeFilters.status,knowledgeFilters.nodeId,hintKind]);
+    React.useEffect(()=>{if(section!=='runtime'||!summary)return;let live=true;call('guidance.status').then(value=>{if(live)setGuidance(value);}).catch(()=>{});return()=>{live=false;};},[section,summary?.project?.project_id]);
+    // The presentation may arrive after the overview's first render; a compact
+    // publications page remains useful as a fallback and material index.
+    function changeSection(next) {
+      if(scrollRef.current)scrollMemory.current[section]=scrollRef.current.scrollTop;
+      setSection(next);setReader(null);setSelectedKnowledge(null);setSelectedNode(null);
+      requestAnimationFrame(()=>{if(scrollRef.current)scrollRef.current.scrollTop=scrollMemory.current[next]??0;});
+    }
+    async function loadAll(collection) {
+      let cursor=null,items=[];
+      do {const page=await call('workbench.page',{collection,cursor:cursor??undefined,limit:100});items.push(...page.items);cursor=page.cursor;}while(cursor);
+      return items;
+    }
+    async function showGraph() {
+      setGraphMode(true);
+      if(graphData)return;
+      try {const [nodes,dependencies,relations]=await Promise.all(['nodes','dependencies','relations'].map(loadAll));setGraphData({nodes,dependencies,relations});}
+      catch(e){setNotice(`无法读取研究图：${e.message}`);}
+    }
+    async function chooseNode(id) {
+      setSelectedNode(id);setDetailTab('result');setNodeDetail(null);setNodePubs([]);setNodeAttempts([]);
+      const seq=++selectionSeq.current;
+      try {const [detail,pubs,attempts]=await Promise.all([call('reference.get',{ref:id}),call('workbench.page',{collection:'publications',nodeId:id,limit:100}),call('workbench.page',{collection:'attempts',nodeId:id,limit:100})]);
+        if(seq===selectionSeq.current){setNodeDetail(detail.value);setNodePubs(pubs.items);setNodeAttempts(attempts.items);}}
+      catch(e){if(seq===selectionSeq.current)setNotice(`无法读取节点：${e.message}`);}
+    }
+    async function chooseKnowledge(ref) {
+      setSelectedKnowledge(ref);setKnowledgeDetail(null);setKnowledgeHistory(null);setKnowledgeLatest(null);const seq=++selectionSeq.current;
+      try {const detail=await call('reference.get',{ref});const id=detail.value?.knowledge_id;
+        const history=id?await call('knowledge.page',{knowledgeId:id,history:true,limit:100}):null;
+        const latestRef=history?.items?.at(-1)?.ref;
+        const latest=latestRef&&latestRef!==ref?await call('reference.get',{ref:latestRef}):null;
+        if(seq===selectionSeq.current){setKnowledgeDetail(detail.value);setKnowledgeHistory(history);setKnowledgeLatest(latest?.value??null);}}
+      catch(e){if(seq===selectionSeq.current)setNotice(`无法读取知识：${e.message}`);}
+    }
+    async function openReader(ref,pointer=null) {
+      if(!reader){focusBeforeReader.current=document.activeElement;scrollBeforeReader.current=scrollRef.current?.scrollTop??0;}
+      setReader({ref,pointer,loading:true});const seq=++readerSeq.current;
+      try {
+        let first=await call('reference.content',{ref,offset:0});
+        if(first.kind==='directory') {
+          const listing=await call('reference.entries',{ref});
+          if(seq===readerSeq.current)setReader({ref,kind:'directory',resolution:listing.resolution,items:listing.items,cursor:listing.cursor});
+          return;
+        }
+        if(first.kind==='binary') {if(seq===readerSeq.current)setReader({ref,kind:'binary',...first});return;}
+        if(first.kind==='text') {
+          const bytes=[];let part=first;
+          while(part){bytes.push(Uint8Array.from(atob(part.chunk),c=>c.charCodeAt(0)));part=part.next_offset==null?null:await call('reference.content',{ref,offset:part.next_offset});}
+          const size=bytes.reduce((a,b)=>a+b.length,0),all=new Uint8Array(size);let offset=0;
+          for(const fragment of bytes){all.set(fragment,offset);offset+=fragment.length;}
+          if(seq===readerSeq.current)setReader({ref,pointer,kind:'text',resolution:first.resolution,body:new TextDecoder().decode(all),truncated:first.truncated,total_bytes:first.total_bytes});
+          return;
+        }
+        // A snapshot or publication-level ref is a container. The user sees
+        // its available frozen entries, rather than a raw metadata dump.
+        const meta=await call('reference.get',{ref});
+        let items=[];
+        if(meta.kind==='snapshot')items=(meta.value?.manifest??[]).filter(item=>item.source_path&&!item.source_path.startsWith('._')).map(item=>({name:item.source_path,kind:item.kind,ref:`${ref}#${item.source_path}`,status:item.status}));
+        if(meta.kind==='publication')items=(meta.value?.items??[]).map(item=>({name:item.item_id,kind:item.kind,ref:item.ref}));
+        if(seq===readerSeq.current)setReader({ref,kind:items.length?'directory':'unavailable',resolution:first.resolution,items,cursor:null,metadata:meta.value});
+      } catch(e){if(seq===readerSeq.current)setReader({ref,kind:'error',message:e.message});}
+    }
+    function closeReader(){readerSeq.current++;setReader(null);requestAnimationFrame(()=>{if(scrollRef.current)scrollRef.current.scrollTop=scrollBeforeReader.current;focusBeforeReader.current?.focus?.();});}
+    async function act(endpoint,payload={}) {
+      if(pending.current||error)return;pending.current=true;setBusy(true);setNotice('');
+      try {const value=await call(endpoint,payload);if(endpoint==='restore.preview')setRestorePreview(value);else if(endpoint==='restore.create')setRestorePreview(null);
+        setNotice(value?.message??'操作已完成');if(value?.sessionId)await openSession(value.sessionId);await refresh();}
+      catch(e){setNotice(`操作失败：${e.message}`);}finally{pending.current=false;setBusy(false);}
+    }
+    const pres=presentation?.status==='ready'?presentation.value:null;
+    const run=summary?.runtime??{},project=summary?.project??{};
+    const nodes=pages.nodes?.items??[];
+    const visibleNodes=nodes.filter(node=>(statusFilter==='all'||node.status===statusFilter)&&(!search||`${node.node_id} ${node.question} ${pres?.nodes?.[node.node_id]?.title??''}`.toLocaleLowerCase().includes(search.toLocaleLowerCase())));
+    const overviewMetric=(metric,index)=>{
+      const left=metric.baseline?.value,right=metric.current?.value,comparable=typeof left==='number'&&typeof right==='number';
+      const max=comparable?Math.max(Math.abs(left),Math.abs(right),metric.threshold?.value??0,.001):1;
+      const display=value=>typeof value==='number'&&metric.display_decimals!=null?value.toFixed(metric.display_decimals):format(value);
+      return h('article',{key:metric.id??index,className:'ari-metric'},
+        h('div',{className:'ari-metric-top'},h('strong',null,metric.label),label(metric.split??'口径未注明')),
+        h('div',{className:'ari-metric-values'},h('span',null,'基线 ',h('b',null,display(left))),h('span',null,'当前 ',h('b',null,display(right)),metric.unit??'')),
+        comparable&&h('div',{className:'ari-compare','aria-label':`基线 ${display(left)}；当前 ${display(right)}`},
+          h('span',{style:{width:`${Math.max(2,Math.abs(left)/max*100)}%`},className:'ari-base-bar'}),
+          h('span',{style:{width:`${Math.max(2,Math.abs(right)/max*100)}%`},className:'ari-current-bar'})),
+        metric.threshold&&h('small',null,`门槛 ${metric.threshold.operator} ${metric.threshold.value}${metric.unit??''}`,
+          metric.threshold.ref&&button('门槛来源',()=>openReader(metric.threshold.ref))),
+        h('small',null,`${metric.population??''} · ${metric.protocol??''}`),
+        h('div',{className:'ari-source'},button('查看基线',()=>openReader(metric.baseline.ref,metric.baseline.pointer)),button('查看当前',()=>openReader(metric.current.ref,metric.current.pointer)),
+          !comparable&&label(metric.comparison_warning??'冻结读值不可用','warning')));
+    };
+    const pubItem=(item)=>h('li',{key:item.ref},h('span',null,item.kind??'材料',' · ',item.source_path??item.item_id),button('阅读',()=>openReader(item.ref)));
+    const pubCard=(pub,category='all')=>{
+      const items=(pub.items??[]).filter(item=>category==='all'||materialKind(item)===category);
+      if(category!=='all'&&!items.length)return null;
+      return h('article',{key:pub.publication_id,className:'ari-row'},
+      h('div',{className:'ari-row-head'},h('strong',null,pub.publication_id),label(pub.status==='complete'?'材料完整':'阶段材料',pub.status==='complete'?'success':'muted')),
+      h('p',null,pub.summary||'无摘要'),h('small',null,`${pub.node_id??'项目级'} · ${fmtDate(pub.created_at)}`),
+      h('ul',{className:'ari-file-list'},...items.map(pubItem)));
+    };
+    function overview() {
+      const latest=summary?.final_publication;
+      return h('div',{className:'ari-view'},
+        h('div',{className:'ari-view-heading'},h('div',null,h('span',{className:'ari-eyebrow'},'研究结论'),h('h2',null,pres?.title??'项目成果概览')),
+          label(runNames[run.state]??run.state??'状态未知',run.state==='complete'?'success':'muted')),
+        pres?h('p',{className:'ari-lead'},pres.summary):h('div',{className:'ari-callout'},
+          h('strong',null,presentation?.status==='invalid'?'展示资料不可用':'本项目尚无展示摘要'),
+          h('p',null,presentation?.message??'下方保留登记的阶段材料；报告与研究过程仍可阅读。')),
+        pres?.stale&&h('p',{className:'ari-callout',role:'status'},'展示资料所绑定的发布版本已过期；请核对新材料后更新摘要。'),
+        h('div',{className:'ari-overview-grid'},
+          h('section',{className:'ari-panel ari-outcome'},h('span',{className:'ari-eyebrow'},'当前成果'),
+            h('h3',null,pres?.nodes?.[pres?.featured_node_id]?.title??latest?.summary??'查看阶段材料'),
+            h('p',null,pres?.nodes?.[pres?.featured_node_id]?.summary??(latest?brief(latest.summary,260):'尚无已登记的阶段成果。')),
+            h('div',{className:'ari-action-row'},pres?.report_ref&&button('阅读最终报告',()=>openReader(pres.report_ref),{className:'ari-primary'}),
+              button('查看研究过程',()=>changeSection('process')))),
+          h('section',{className:'ari-panel'},h('span',{className:'ari-eyebrow'},'交付与当前状态'),
+            h('p',null,`研究目标：${runNames[run.state]??run.state??'状态未知'}`),
+            h('p',null,`当前执行：${run.running_count??0} 个会话 · 审批 ${run.pending_approvals??0} 项`),
+            h('p',null,`知识 ${summary.counts?.knowledge??0} 个修订 · 待整理 ${summary.review_queue?.pending_total??0} 项`),
+            (pres?.deliverables??[]).map((item,i)=>h('div',{key:i,className:'ari-delivery'},h('strong',null,item.label),button('打开材料',()=>openReader(item.ref)))),
+            !pres?.deliverables?.length&&button('浏览已发布材料',()=>changeSection('materials')))),
+        pres?.metrics?.length?h('section',{className:'ari-panel'},h('div',{className:'ari-section-head'},h('div',null,h('span',{className:'ari-eyebrow'},'可追溯的量化结果'),h('h3',null,'基线与最终方案')),h('small',null,'每项只比较相同数据划分与口径')),
+          h('div',{className:'ari-metric-grid'},...pres.metrics.slice(0,4).map(overviewMetric))):
+          h('section',{className:'ari-panel'},h('h3',null,'阶段材料'),...(pages.publications?.items??[]).slice(-3).reverse().map(pub=>pubCard(pub)),
+            button('查看全部材料',()=>changeSection('materials'))),
+        run.pending_approvals>0&&h('section',{className:'ari-panel ari-attention'},h('h3',null,'需要处理的原生审批'),
+          ...(run.approvals??[]).map(a=>h('p',{key:a.approval_id},a.reason??'审批详情',button('打开会话',()=>openSession(a.session_id))))),
+        h('details',{className:'ari-panel'},h('summary',null,'完整研究目标'),h('p',{className:'ari-prose'},project.goal)));
+    }
+    function process() {
+      const metadata=pres?.nodes??{};
+      const base=graphData??{nodes,dependencies:[],relations:[]};
+      const model=projectGraph(base),ids=new Set(model.nodes.map(n=>n.node_id));
+      return h('div',{className:'ari-view'},h('div',{className:'ari-view-heading'},h('div',null,h('span',{className:'ari-eyebrow'},'研究演进'),h('h2',null,'研究过程')),
+        h('div',{className:'ari-segmented'},button('时间线',()=>setGraphMode(false),{'aria-pressed':!graphMode}),button('执行关系图',showGraph,{'aria-pressed':graphMode}))),
+        h('div',{className:'ari-filterbar'},h('input',{'aria-label':'搜索研究节点',placeholder:'搜索编号或问题',value:search,onChange:e=>setSearch(e.target.value)}),
+          h('select',{'aria-label':'筛选节点状态',value:statusFilter,onChange:e=>setStatusFilter(e.target.value)},...['all',...new Set(nodes.map(n=>n.status))].map(s=>h('option',{key:s,value:s},s==='all'?'全部登记状态':s)))),
+        h('div',{className:'ari-work-area'},h('div',{className:'ari-work-main'},
+          graphMode?(graphData?h(ResearchGraph,{model,visibleIds:ids,selected:selectedNode,onSelect:chooseNode,onEdge:e=>setNotice(`${e.source} → ${e.target}：${e.records.map(r=>r.label??r.relation_type).join('、')}`),focused:summary.attempt?.node_id,labels:metadata}):h('p',{className:'ari-empty'},'正在读取执行关系图…')):
+          h('ol',{className:'ari-timeline'},...visibleNodes.map(node=>{
+            const info=metadata[node.node_id];return h('li',{key:node.node_id},h('button',{className:'ari-step','aria-pressed':selectedNode===node.node_id,onClick:()=>chooseNode(node.node_id)},
+              h('span',{className:'ari-step-marker'},node.node_id),h('span',{className:'ari-step-body'},h('strong',null,info?.title??brief(node.question,70)),
+                h('span',null,info?.summary??brief(node.question,180)),h('small',null,info?.outcome??`登记状态：${node.status}`)),
+              h('span',{className:'ari-step-arrow','aria-hidden':'true'},'↗'))); })),
+          !pages.nodes?h('p',{className:'ari-empty'},'正在读取研究节点…'):
+          !visibleNodes.length&&h('p',{className:'ari-empty'},'没有匹配的研究节点。'),
+          !graphMode&&pages.nodes?.cursor&&button('加载更多节点',()=>loadPage('nodes',{more:true}))),
+          selectedNode&&h('aside',{className:'ari-detail','aria-label':'节点详情',style:detailOverlayStyle()},
+            h('div',{className:'ari-detail-head'},h('strong',null,selectedNode),button('关闭',()=>{selectionSeq.current++;setSelectedNode(null);setNodeDetail(null);})),
+            h('div',{className:'ari-detail-tabs'},...[['result','结果'],['evidence','证据'],['history','计划与历史']].map(([id,name])=>button(name,()=>setDetailTab(id),{'aria-pressed':detailTab===id,key:id}))),
+            !nodeDetail?h('p',null,'正在读取节点…'):
+            detailTab==='result'?h('div',null,h('h3',null,metadata[selectedNode]?.title??brief(nodeDetail.question,90)),
+              label(metadata[selectedNode]?.outcome??`登记状态：${nodeDetail.status}`),
+              h('p',null,metadata[selectedNode]?.summary??'本节点尚无独立的展示摘要；以下是登记的阶段材料。'),
+              ...nodePubs.map(pub=>pubCard(pub)),!nodePubs.length&&h('p',null,'暂无归属于此节点的阶段材料；项目级材料可在“材料”中浏览。')):
+            detailTab==='evidence'?h('div',null,h('h3',null,'固定输入与登记证据'),
+              ...(nodeDetail.inputs??[]).map((ref,i)=>h('p',{key:i},h(LinkRef,{value:ref,onOpen:openReader}))),
+              ...(metadata[selectedNode]?.refs??[]).filter(ref=>typeof ref==='string'&&(ref.startsWith('pub/')||ref.startsWith('S-'))).map(ref=>h('p',{key:`summary-${ref}`},h(LinkRef,{value:ref,onOpen:openReader}))),
+              ...nodePubs.flatMap(pub=>(pub.items??[]).map(item=>h('p',{key:item.ref},h(LinkRef,{value:item.ref,onOpen:openReader})))),
+              h('p',{className:'ari-muted'},'节点关联仅使用账本登记字段；未填写的知识归属不从正文猜测。')):
+            h('div',null,h('h3',null,'登记问题'),h('p',{className:'ari-prose'},nodeDetail.question),
+              h('h3',null,'提出理由'),h('p',{className:'ari-prose'},nodeDetail.why_now??'未记录'),
+              h('h3',null,'原始研究计划'),markdown(nodeDetail.plan??'未记录'),
+              h('h3',null,'工作段历史'),...nodeAttempts.map(attempt=>h('p',{key:attempt.attempt_id},`${attempt.attempt_id} · ${attempt.state} · ${fmtDate(attempt.started_at)} → ${fmtDate(attempt.ended_at)}`)),
+              h('dl',{className:'ari-facts'},h('dt',null,'登记状态'),h('dd',null,nodeDetail.status),h('dt',null,'原始谱系'),h('dd',null,nodeDetail.origin_kind??'未记录'),
+                h('dt',null,'问题版本'),h('dd',null,nodeDetail.question_ref??'未记录'))))));
+    }
+    function knowledgeView() {
+      const rows=knowledge?.items??[];
+      return h('div',{className:'ari-view'},h('div',{className:'ari-view-heading'},h('div',null,h('span',{className:'ari-eyebrow'},'结果与主张'),h('h2',null,'成果与知识')),
+        h('small',null,`现行版本匹配 ${knowledge?.total??0} 条；版本状态不表示科学验证`)),
+        pres?.metrics?.length>0&&h('section',{className:'ari-panel'},h('h3',null,'可比结果'),h('div',{className:'ari-metric-grid'},...pres.metrics.slice(0,4).map(overviewMetric))),
+        h('div',{className:'ari-filterbar'},h('input',{'aria-label':'搜索项目知识',placeholder:'搜索知识编号或正文',value:knowledgeFilters.query,onChange:e=>setKnowledgeFilters({...knowledgeFilters,query:e.target.value})}),
+          h('select',{'aria-label':'筛选知识类型',value:knowledgeFilters.kind,onChange:e=>setKnowledgeFilters({...knowledgeFilters,kind:e.target.value})},...['','finding','open_question','decision','method','risk'].map(s=>h('option',{key:s,value:s},s||'全部类型'))),
+          h('select',{'aria-label':'筛选知识状态',value:knowledgeFilters.status,onChange:e=>setKnowledgeFilters({...knowledgeFilters,status:e.target.value})},...['','proposed','working','verified','retracted'].map(s=>h('option',{key:s,value:s},s||'全部状态'))),
+          h('select',{'aria-label':'筛选知识节点',value:knowledgeFilters.nodeId,onChange:e=>setKnowledgeFilters({...knowledgeFilters,nodeId:e.target.value})},
+            h('option',{value:''},'所有节点'),h('option',{value:'__unassigned__'},'未登记节点'),...(pages.nodes?.items??[]).map(n=>h('option',{key:n.node_id,value:n.node_id},n.node_id)))),
+        h('div',{className:'ari-work-area'},h('div',{className:'ari-work-main'},
+          h('div',{className:'ari-row-list'},...rows.map(item=>h('button',{key:item.ref,className:'ari-knowledge-row','aria-pressed':selectedKnowledge===item.ref,onClick:()=>chooseKnowledge(item.ref)},
+            h('span',{className:'ari-row-head'},h('strong',null,item.ref),label(item.status)),
+            h('span',null,item.statement),h('small',null,`${item.kind} · ${item.node_id??'未登记节点'} · 证据 ${item.evidence_refs?.length??0} 项`)))),
+          !knowledge?h('p',{className:'ari-empty'},'正在读取现行知识…'):
+          !rows.length&&h('p',{className:'ari-empty'},'没有匹配的现行知识。'),knowledge?.cursor&&button('加载更多知识',()=>loadKnowledge(true))),
+          selectedKnowledge&&h('aside',{className:'ari-detail','aria-label':'知识详情',style:detailOverlayStyle()},
+            h('div',{className:'ari-detail-head'},h('strong',null,selectedKnowledge),button('关闭',()=>{selectionSeq.current++;setSelectedKnowledge(null);})),
+            knowledgeDetail?h('div',null,h('p',{className:'ari-prose'},text(knowledgeDetail.statement)),
+              knowledgeLatest&&h('div',{className:'ari-revision-diff'},h('h3',null,`与现行版本 ${knowledgeHistory?.items?.at(-1)?.ref} 比较`),
+                (()=>{const diff=changeBlocks(knowledgeDetail.statement,knowledgeLatest.statement);return h('div',null,
+                  diff.removed&&h('pre',{className:'ari-diff-old'},`旧版独有\n${diff.removed}`),
+                  diff.added&&h('pre',{className:'ari-diff-new'},`现行版本新增\n${diff.added}`),
+                  !diff.added&&!diff.removed&&h('p',null,'正文相同；来源和状态仍可能不同。'));})()),
+              h('h3',null,'证据'),...(knowledgeDetail.evidence_refs??[]).map(ref=>h('p',{key:ref},h(LinkRef,{value:ref,onOpen:openReader}))),
+              ...(knowledgeDetail.field_checks??[]).map((check,i)=>h('p',{key:i},`字段检查：${check.result==='consistent'?'声明字段与冻结文件一致':check.result==='inconsistent'?'声明字段与冻结文件不一致':'无法检查'}`)),
+              h('details',null,h('summary',null,'来源与适用条件'),h('pre',null,JSON.stringify({asserted_at:knowledgeDetail.asserted_at,execution_refs:knowledgeDetail.execution_refs,source_identity:knowledgeDetail.source_identity,scope:knowledgeDetail.scope,conditions:knowledgeDetail.conditions},null,2))),
+              h('h3',null,'修订历史'),...(knowledgeHistory?.items??[]).map(item=>button(`${item.ref}${item.ref===selectedKnowledge?' · 当前查看':''}`,()=>chooseKnowledge(item.ref),{key:item.ref,className:'ari-history-link'})),
+              knowledgeHistory?.items?.length>1&&h('p',{className:'ari-muted'},'选择历史版本查看其精确内容与来源；新增版本本身不代表旧版有风险。')):
+              h('p',null,'正在读取知识…'))));
+    }
+    function materials() {
+      return h('div',{className:'ari-view'},h('div',{className:'ari-view-heading'},h('div',null,h('span',{className:'ari-eyebrow'},'可复核材料'),h('h2',null,'报告与交付物')),
+        h('small',null,`${pages.publications?.total??0} 次阶段发布`)),
+        pres?.report_ref&&h('section',{className:'ari-feature-file'},h('div',null,h('span',{className:'ari-eyebrow'},'最终报告'),h('h3',null,'直接阅读完整报告'),h('small',null,pres.report_ref)),button('阅读报告',()=>openReader(pres.report_ref),{className:'ari-primary'})),
+        pres?.deliverables?.length>0&&h('section',{className:'ari-panel'},h('h3',null,'最终交付'),...(pres.deliverables.map((item,i)=>h('div',{key:i,className:'ari-delivery'},h('strong',null,item.label),button('打开',()=>openReader(item.ref)))))),
+        h('div',{className:'ari-segmented'},...[['all','全部'],['reports','报告'],['results','结果数据'],['code','代码'],['deliverables','交付']].map(([id,title])=>button(title,()=>setMaterialFilter(id),{'aria-pressed':materialFilter===id,key:id}))),
+        h('div',{className:'ari-row-list'},...(pages.publications?.items??[]).map(pub=>pubCard(pub,materialFilter))),
+        !pages.publications?.items?.length&&h('p',{className:'ari-empty'},'尚无已登记的阶段材料。'),
+        pages.publications?.cursor&&button('加载更多发布',()=>loadPage('publications',{more:true})));
+    }
+    function runtime() {
+      const collections={sessions:'项目会话',tasks:'探索任务',review_todos:'历史整理事项',hints:'结构候选线索',specialists:'节点内部协作',checkpoints:'节点检查点',snapshots:'历史快照',restorations:'接手记录'};
+      const current=['sessions','tasks','specialists'],history=['sessions','tasks','review_todos','hints','checkpoints','snapshots','restorations'];
+      const group=maintenanceTab==='current'?current:history;
+      const disabled=busy||!!error||!summary;
+      const actions=run.state==='complete'?[]:run.state==='running'?[['暂停研究','pause'],['停止研究','stop']]:run.state==='paused'||run.state==='cold'?[['继续研究','resume'],['停止研究','stop']]:run.state==='unverified'?[['核实停止','verify-stop']]:[['开始研究','auto']];
+      const historicTask=item=>item.state==='failed'&&(run.state==='complete'||pres?.nodes?.[item.node_id]?.outcome?.includes('替代'));
+      const historicSession=item=>!!item.detached||(run.state==='complete'&&item.session_id!==run.main_session_id);
+      function rowsFor(name) {
+        const all=pages[name]?.items??[];
+        if(name==='tasks')return all.filter(item=>maintenanceTab==='history'?historicTask(item):!historicTask(item));
+        if(name==='sessions')return all.filter(item=>maintenanceTab==='history'?historicSession(item):!historicSession(item));
+        if(name!=='hints')return all;
+        const groups=new Map();
+        for(const item of all){const key=`${item.target}:${item.class}`;const group=groups.get(key)??{...item,members:[],repair_evidence:[]};group.members.push(item);group.repair_evidence.push(...(item.repair_evidence??[]));groups.set(key,group);}
+        return [...groups.values()];
+      }
+      return h('div',{className:'ari-view'},h('div',{className:'ari-view-heading'},h('div',null,h('span',{className:'ari-eyebrow'},'执行与维护'),h('h2',null,'运行与维护')),
+        label(runNames[run.state]??run.state??'状态未知')),
+        h('section',{className:'ari-panel'},h('h3',null,'当前执行'),h('p',null,`运行会话 ${run.running_count??0} · 等待原生审批 ${run.pending_approvals??0} · 待整理 ${summary.review_queue?.pending_total??0}`),
+          h('div',{className:'ari-action-row'},run.main_session_id&&button('打开研究主会话',()=>openSession(run.main_session_id)),
+            ...actions.map(([title,endpoint])=>button(title,()=>act(endpoint),{key:endpoint,disabled}))),
+          ...(run.approvals??[]).map(a=>h('p',{key:a.approval_id,role:'status'},`待审批：${a.reason??a.approval_id}`,button('打开会话',()=>openSession(a.session_id))))),
+        h('div',{className:'ari-segmented'},button('当前执行',()=>setMaintenanceTab('current'),{'aria-pressed':maintenanceTab==='current'}),button('历史与整理',()=>setMaintenanceTab('history'),{'aria-pressed':maintenanceTab==='history'})),
+        ...group.map(name=>h('section',{key:name,className:'ari-panel'},h('div',{className:'ari-section-head'},h('h3',null,collections[name]),h('small',null,`已显示 ${rowsFor(name).length} / ${pages[name]?.total??summary.counts?.[name]??0} 项`)),
+          name==='review_todos'&&h('p',{className:'ari-muted'},'整理队列是内部复核工作，不是等待用户批准。'),
+          name==='hints'&&h('p',{className:'ari-muted'},'结构候选仅供复核；已有修复记录与历史版本需要分别判断。'),
+          name==='hints'&&h('select',{'aria-label':'筛选结构候选类型',value:hintKind,onChange:e=>setHintKind(e.target.value)},
+            ...[['','全部线索'],['prose_mention_without_relation','正文提及缺少关系'],['whole_snapshot_evidence','整份快照引用'],['lineage_mention_without_predecessor','前驱提及'],['complete_publication_cites_risk','完整发布风险']].map(([value,title])=>h('option',{key:value,value},title))),
+          ...rowsFor(name).map((item,i)=>h('details',{key:item.task_id??item.session_id??item.todo_id??item.snapshot_id??item.checkpoint_id??item.restoration_id??`${item.target}:${item.class}:${i}`,className:'ari-maintenance-row'},
+            h('summary',null,h('strong',null,item.session_id??item.task_id??item.todo_id??item.snapshot_id??item.checkpoint_id??item.target??item.restoration_id??`记录 ${i+1}`),
+              h('span',null,` · ${item.state??item.pause_reason??item.class??item.trigger_kind??''}${item.members?.length>1?` · 同类 ${item.members.length} 条`:''}`)),
+            h('p',null,item.purpose??item.error??item.trigger_ref??item.node_id??''),
+            name==='hints'&&h('div',null,h('p',null,`修复记录：${item.repair_evidence?.length?item.repair_evidence.join('、'):'无'}`),
+              ...(item.members??[]).map((member,j)=>h('p',{key:j},`${member.source??member.target}：${JSON.stringify(member.evidence??{})}`))),
+            name==='review_todos'&&h('p',null,'此项为历史整理队列，不是原生审批。'),
+            item.session_id&&button('打开会话',()=>openSession(item.session_id)),
+            name==='sessions'&&['human','native_stop','finished','segment_complete','complete'].includes(item.pause_reason)&&button('继续此会话',()=>act('resume',{targetSessionId:item.session_id}),{disabled}),
+            name==='sessions'&&['requested','unverified'].includes(item.close_state)&&button('核实工作段收尾',()=>act('verify-close',{targetSessionId:item.session_id}),{disabled}),
+            name==='sessions'&&['fault','host_limit','unverified'].includes(item.pause_reason)&&button('核实并重试会话',()=>act('retry',{targetSessionId:item.session_id}),{disabled}),
+            name==='tasks'&&item.state==='unverified'&&button('核实任务',()=>act('verify-task',{taskId:item.task_id}),{disabled}),
+            name==='tasks'&&['failed','unverified'].includes(item.state)&&maintenanceTab==='current'&&button('核实并重试',()=>act('retry',{taskId:item.task_id}),{disabled}),
+            name==='specialists'&&['running','unverified'].includes(item.state)&&button('核实专家退出',()=>act('verify-specialist',{taskId:item.task_id}),{disabled}),
+            item.snapshot_id&&button('查看快照材料',()=>openReader(item.snapshot_id)),
+            name==='snapshots'&&item.snapshot_id&&button('预览接手',()=>act('restore.preview',{snapshotId:item.snapshot_id}),{disabled}))),
+          pages[name]?.cursor&&button('加载更多',()=>loadPage(name,{more:true,limit:name==='hints'?8:20,kind:name==='hints'?hintKind:null})))),
+        restorePreview&&h('section',{className:'ari-panel'},h('div',{className:'ari-section-head'},h('h3',null,'接手预览'),button('关闭',()=>setRestorePreview(null))),
+          h('p',null,`来源 ${restorePreview.context?.source_attempt_id??'未知'} · 缺失 ${restorePreview.missing?.length??0} 项`),
+          !restorePreview.eligible&&h('p',{role:'alert'},'来源执行仍在进行或待核实，暂不能创建接手会话。'),
+          button('创建接手会话',()=>act('restore.create',{snapshotId:restorePreview.snapshot_id,previewId:restorePreview.preview_id}),{disabled:disabled||!restorePreview.eligible})),
+        h('details',{className:'ari-panel'},h('summary',null,'高级设置与历史上下文'),
+          h('p',null,'科研指导按内容版本登记，只供相关任务使用。'),
+          guidance&&h('p',null,`当前指导：${guidance.path??'无'} · ${guidance.version??'无版本'}`),
+          h('input',{'aria-label':'科研指导文档路径',placeholder:'指导 Markdown 的绝对路径',value:guidancePath,onChange:e=>setGuidancePath(e.target.value)}),
           h('input',{'aria-label':'科研指导版本',placeholder:'可选版本名',value:guidanceVersion,onChange:e=>setGuidanceVersion(e.target.value)}),
-          btn('登记科研指导','guidance.register',{path:guidancePath,version:guidanceVersion||undefined},disabled||!guidancePath.trim()),
-          h('p',null,'移出后清除当前会话的项目上下文和插件续轮权限，原对话及材料保留。执行会话须先停止。'),btn('将此会话移出项目','detach')),
-        h('details',{className:'ari-section'},h('summary',null,`接手记录 · ${(state.restorations??[]).length}`),...(state.restorations??[]).map(r=>h('p',{key:r.restoration_id},`${r.snapshot_id} · ${r.source_attempt_id} → ${r.target_attempt_id??'未登记工作段'}`)))));
+          button('登记科研指导',()=>act('guidance.register',{path:guidancePath,version:guidanceVersion||undefined}),{disabled:disabled||!guidancePath.trim()}),
+          button('将此会话移出项目',()=>act('detach'),{disabled})));
+    }
+    function readerView() {
+      if(!reader)return null;
+      const outcome=reader.resolution?.outcome;
+      const filename=String(reader.resolution?.source_path??reader.resolution?.entry?.source_path??reader.ref).toLowerCase();
+      const isMarkdown=filename.endsWith('.md')||reader.ref===pres?.report_ref;
+      return h('div',{className:'ari-reader-backdrop'},h('aside',{className:'ari-reader',role:'dialog','aria-modal':'true','aria-label':'研究材料'},
+        h('div',{className:'ari-reader-head'},h('div',null,h('span',{className:'ari-eyebrow'},'冻结研究材料'),h('h2',null,reader.ref)),button('关闭 · Esc',closeReader,{'aria-label':'关闭材料',autoFocus:true})),
+        reader.loading?h('p',null,'正在校验并读取材料…'):
+        reader.kind==='error'?h('p',{role:'alert'},reader.message):
+        reader.kind==='directory'?h('div',null,h('p',{className:'ari-muted'},'选择目录中的文件继续阅读。目录级引用不指向单个结论字段。'),
+          h('ul',{className:'ari-reader-list'},...(reader.items??[]).map(item=>h('li',{key:item.ref},
+            button(`${item.kind==='directory'?'▣':'▤'}  ${item.name}`,()=>openReader(item.ref)),item.status&&label(item.status)))),
+          reader.cursor&&button('加载更多目录项',async()=>{const next=await call('reference.entries',{ref:reader.ref,cursor:reader.cursor});setReader({...reader,items:[...reader.items,...next.items],cursor:next.cursor});})):
+        reader.kind==='binary'?h('p',null,`二进制材料 · ${reader.total_bytes} 字节。冻结对象已校验，浏览器不显示文件内容。`):
+        reader.kind==='text'?h('div',null,reader.truncated&&h('p',{role:'status'},`预览限制为 2 MiB；原文件 ${reader.total_bytes} 字节。`),
+          reader.pointer&&h('div',{className:'ari-pointer'},h('strong',null,'指标字段'),h('code',null,reader.pointer),
+            h('strong',null,(()=>{try{return String(jsonPointer(JSON.parse(reader.body),reader.pointer)??'字段缺失');}catch{return '无法解析 JSON';}})())),
+          isMarkdown?markdown(reader.body):filename.endsWith('.json')?
+            h('pre',{className:'ari-code'},(()=>{try{return JSON.stringify(JSON.parse(reader.body),null,2);}catch{return reader.body;}})()):
+            h('pre',{className:'ari-code'},reader.body)):
+        h('p',{role:'alert'},`材料不可打开：${reader.resolution?.reason??'冻结对象不可用'}`),
+        h('details',{className:'ari-reader-meta'},h('summary',null,'来源与完整性'),h('pre',null,JSON.stringify(reader.resolution??reader.metadata??{},null,2)))));
+    }
+    React.useEffect(()=>{if(!reader)return;const key=e=>{if(e.key==='Escape'){e.preventDefault();closeReader();}};document.addEventListener('keydown',key);return()=>document.removeEventListener('keydown',key);},[reader]);
+    return h('div',{className:'ari-app'},h('style',null,researchStyles),
+      h('header',{className:'ari-app-header'},h('div',{className:'ari-brand'},h('span',{className:'ari-brand-mark'},'R'),h('div',null,h('span',{className:'ari-eyebrow'},'RESEARCH · 研究工作台'),h('strong',null,pres?.title??brief(project.goal,52)??'关联研究项目'))),
+        h('div',{className:'ari-header-state'},summary&&label(runNames[run.state]??run.state??'状态未知',run.state==='complete'?'success':'muted'),
+          summary&&h('small',null,`${summary.counts?.nodes??0} 个研究节点`))),
+      error&&h('div',{className:'ari-alert',role:'alert'},summary?'连接异常，显示最后一次成功读取的数据。':'暂时无法读取研究项目。',` ${error}`,button('重试',refresh)),
+      notice&&h('div',{className:'ari-notice',role:'status'},notice,button('关闭',()=>setNotice(''))),
+      !summary?h('section',{className:'ari-onboarding'},h('span',{className:'ari-eyebrow'},'项目关联'),h('h2',null,'连接研究项目'),
+        h('p',null,'项目目录采用当前 DSH 会话工作目录。'),
+        h('input',{'aria-label':'研究目标',placeholder:'新项目的研究目标',value:goal,onChange:e=>setGoal(e.target.value)}),
+        button('新建并关联',async()=>{try{setBusy(true);await call('open',{goal});await refresh();}catch(e){setNotice(e.message);}finally{setBusy(false);}}, {disabled:busy||!goal.trim()}),
+        button('关联已有项目',async()=>{try{setBusy(true);await call('open');await refresh();}catch(e){setNotice(e.message);}finally{setBusy(false);}}, {disabled:busy})):
+      h('div',{className:'ari-app-body'},h('nav',{className:'ari-nav','aria-label':'Research 页面'},...NAV.map(([id,name],i)=>button(name,()=>changeSection(id),{
+        key:id,'aria-current':section===id?'page':undefined,className:'ari-nav-item',title:name,
+      }))),h('main',{className:'ari-main',ref:scrollRef,tabIndex:-1},
+        section==='overview'?overview():section==='process'?process():section==='knowledge'?knowledgeView():section==='materials'?materials():runtime())),
+      readerView());
   };
 }
 
@@ -535,8 +775,8 @@ function createResearchReceipt(React, Workbench, researchStyles) {
       h('aside',{className:`ari-receipt ${failed?'ari-receipt-error':''}`},
         h('div',{className:'ari-receipt-row'},h('span',{className:'ari-receipt-mark','aria-hidden':'true'},failed?'!':'R'),
           h('span',{className:'ari-receipt-copy'},
-            h('strong',null,associated?snapshot.project?.goal??'Research 已关联':'Research / 研究项目'),
-            h('small',null,associated?`${snapshot.project?.control==='auto'?'自动推进已开启':snapshot.project?.control==='manual'?'已初始化 · 规划模式':snapshot.project?.control} · ${snapshot.runtime?.current?.pending_approvals?'当前对话等待审批':snapshot.runtime?.current?.native_status==='running'?'当前对话正在工作':'当前对话空闲'} · 待审批 ${snapshot.runtime?.pending_approvals??0} · schema ${snapshot.schema_version??'?'}`:'初始化与关联无需发送消息或调用模型')),
+            h('strong',null,associated?'Research 已关联':'Research / 研究项目'),
+            h('small',null,associated?`${snapshot.project?.control==='auto'?'自动推进已开启':snapshot.project?.control==='manual'?'已初始化 · 规划模式':snapshot.project?.control} · ${snapshot.runtime?.current?.pending_approvals?'当前对话等待审批':snapshot.runtime?.current?.native_status==='running'?'当前对话正在工作':'当前对话空闲'} · 待审批 ${snapshot.runtime?.pending_approvals??0}`:'初始化与关联无需发送消息或调用模型')),
           h('button',{type:'button',className:'ari-receipt-entry','aria-haspopup':'dialog',onClick:()=>setOpened(true)},'打开研究工作台')),
         snapshot?.command&&h('div',{key:snapshot.commandSequence,className:'ari-command-result'},
           h('p',{role:failed?'alert':'status','aria-live':'polite'},`Research 命令${failed?'失败':'已完成'} · 第 ${snapshot.commandSequence} 次 · ${snapshot.commandTime}`),
@@ -549,8 +789,8 @@ function createResearchReceipt(React, Workbench, researchStyles) {
 return {inject:['slots','connection','sessions'],apply(ctx){
 const rpc=(endpoint,payload)=>ctx.connection.rpc.call('/research-v5',endpoint,payload);
 const Graph=createResearchGraph(React,layoutGraph,inViewport,clampZoom);
-const Workbench=createWorkbench(React,rpc,id=>ctx.sessions.open(id),projectGraph,Graph,createResearchDetails(React),researchStyles);
-const Receipt=createResearchReceipt(React,Workbench,researchStyles),receipts=createReceiptState(rpc);
+const Workbench=createResearchWorkbench(React,rpc,id=>ctx.sessions.open(id),projectGraph,Graph,(()=>{try{return require('@deepseek-ai/dsh-client-ui-primitives').MarkdownText;}catch{return null;}})(),researchStyles+researchAppStyles);
+const Receipt=createResearchReceipt(React,Workbench,researchStyles+researchAppStyles),receipts=createReceiptState(rpc);
 ctx.on('command/executed',receipts.executed);
 ctx.slots.inject('conversation.input.dock',()=>ctx.slots.register({name:'conversation.input.dock',id:'research-receipt',order:20,inject:sessionId=>({sessionId,hooks:{receipt:receipts.store(sessionId)},refresh:receipts.refresh})},props=>React.createElement(Receipt,{...props,key:props.sessionId})));
 ctx.slots.inject('conversation.view',()=>ctx.slots.register({name:'conversation.view',id:'research-v5',order:51,label:'Research'},props=>React.createElement(Workbench,{...props,key:props.sessionId})));

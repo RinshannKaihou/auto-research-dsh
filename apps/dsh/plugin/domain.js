@@ -179,6 +179,17 @@ export class ResearchDomain {
     if (collection === 'changes') return this.request(agent, 'changes_page', { ...cursor, limit });
     return this.request(agent, 'history_page', { collection, ...cursor, limit });
   }
+  async workbenchSummary(agent) {
+    const [summary, live] = await Promise.all([
+      this.request(agent, 'workbench_summary'), this.query(agent),
+    ]);
+    return {...summary, runtime: live.runtime};
+  }
+  workbenchPage(agent, fields) { return this.request(agent, 'workbench_page', fields); }
+  knowledgePage(agent, fields) { return this.request(agent, 'knowledge_page', fields); }
+  presentationGet(agent) { return this.request(agent, 'presentation_get'); }
+  referenceEntries(agent, fields) { return this.request(agent, 'reference_entries', fields); }
+  referenceContent(agent, fields) { return this.request(agent, 'reference_content', fields); }
   lookup(agent, fields = {}) { return this.request(agent, 'query', fields); }
   guidanceStatus(agent) { return this.request(agent, 'guidance_status'); }
   guidanceRegister(agent, path, version, id = operationId(agent)) {

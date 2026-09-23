@@ -88,6 +88,7 @@ def resolve(db, root, ref):
         if row is None:
             return _fail(result, "not_found", "item_missing")
         item = dict(row)
+        result["source_path"] = item.get("source_path")
         version, kind = item.get("object_version"), item.get("object_kind")
         if version is None:
             if subpath:

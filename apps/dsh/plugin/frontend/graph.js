@@ -1,6 +1,6 @@
 export function createResearchGraph(React, layoutGraph, inViewport, clampZoom) {
   const h=React.createElement;
-  return function ResearchGraph({model,visibleIds,selected,onSelect,onEdge,focused}) {
+  return function ResearchGraph({model,visibleIds,selected,onSelect,onEdge,focused,labels={}}) {
     const root=React.useRef(null), drag=React.useRef(null), moved=React.useRef(false), fitted=React.useRef(false);
     const [size,setSize]=React.useState({width:0,height:560});
     const [camera,setCamera]=React.useState({x:24,y:24,k:1});
@@ -19,7 +19,13 @@ export function createResearchGraph(React, layoutGraph, inViewport, clampZoom) {
       const k=clampZoom(Math.min(1.2,size.width/w,size.height/hh));
       setCamera({x:(size.width-w*k)/2-x*k,y:(size.height-hh*k)/2-y*k,k});
     }
-    React.useEffect(()=>{ if(!fitted.current && model.nodes.length && size.width) { fit(); fitted.current=true; } },[model.structuralKey,size]);
+    React.useEffect(()=>{
+      if(!fitted.current && model.nodes.length && size.width) {
+        const first=layout.positions.get(focused)??layout.positions.get(model.nodes[0].node_id);
+        setCamera({x:24-first.x,y:28-first.y,k:1});fitted.current=true;
+      }
+    },[model.structuralKey,size.width]);
+    React.useEffect(()=>{if(selected&&size.width)reveal(selected);},[selected,size.width]);
     function zoom(factor) { setCamera(c=>{const k=clampZoom(c.k*factor),f=k/c.k;return {k,x:size.width/2-(size.width/2-c.x)*f,y:size.height/2-(size.height/2-c.y)*f};}); }
     function reveal(id) {
       const p=layout.positions.get(id);
@@ -54,7 +60,7 @@ export function createResearchGraph(React, layoutGraph, inViewport, clampZoom) {
     return h('div',{className:'ari-graph-shell'},
       h('div',{className:'ari-graph-tools'},h('span',null,'实线：原始关系 · 补录：lineage_correction · 虚线：输入 · 点线：锚点'),
         h('button',{onClick:()=>zoom(1/1.25),'aria-label':'缩小研究图'},'−'),h('span',{'aria-live':'polite'},`${Math.round(camera.k*100)}%`),
-        h('button',{onClick:()=>zoom(1.25),'aria-label':'放大研究图'},'+'),h('button',{onClick:fit},'适应全部')),
+        h('button',{onClick:()=>zoom(1.25),'aria-label':'放大研究图'},'+'),h('button',{onClick:fit},'显示全图')),
       h('div',{ref:root,className:'ari-canvas',onPointerDown:e=>{moved.current=false;if(e.button!==0 || e.target.closest('[role="button"]'))return;moved.current=false;drag.current={x:e.clientX,y:e.clientY,camera};e.currentTarget.setPointerCapture(e.pointerId);},
         onPointerMove:e=>{if(!drag.current)return;const dx=e.clientX-drag.current.x,dy=e.clientY-drag.current.y;moved.current=Math.abs(dx)+Math.abs(dy)>3;setCamera({...drag.current.camera,x:drag.current.camera.x+dx,y:drag.current.camera.y+dy});},
         onPointerUp:()=>{drag.current=null;},onPointerCancel:()=>{drag.current=null;},
@@ -67,8 +73,8 @@ export function createResearchGraph(React, layoutGraph, inViewport, clampZoom) {
               onClick:()=>select(n.node_id),onKeyDown:e=>key(e,n.node_id)},
               h('title',null,n.question),h('rect',{width:260,height:128,rx:10}),
               h('text',{x:16,y:25,className:'ari-node-id'},n.node_id),h('text',{x:244,y:25,textAnchor:'end',className:'ari-node-status'},`${n.status}${focused===n.node_id?' · 当前':''}`),
-              h('foreignObject',{x:16,y:37,width:228,height:49},h('div',{className:'ari-node-question'},n.question)),
-              h('text',{x:16,y:110,className:'ari-node-meta'},`${n.lineage_corrected?'谱系已补录 · ':''}${n.strategy ?? 'continue'} · ${n.attempts.length} 工作段 · ${n.publications.length} 发布`));}))),
+              h('foreignObject',{x:16,y:37,width:228,height:49},h('div',{className:'ari-node-question'},labels[n.node_id]?.title??n.question)),
+              h('text',{x:16,y:110,className:'ari-node-meta'},`${n.lineage_corrected?'谱系已补录 · ':''}${labels[n.node_id]?.outcome??n.strategy??'研究节点'}`));}))),
         !nodes.length&&h('p',{className:'ari-empty'},model.nodes.length?'没有匹配的节点；清除筛选后查看。':'尚无研究节点。规划工作和材料可在下方查看。')),
       h('span',{className:'ari-sr-only'},`共 ${nodes.length} 个节点，可视区域 ${rendered.size} 个。也可切换列表访问所有节点。`));
   };
