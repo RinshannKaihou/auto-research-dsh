@@ -22,10 +22,11 @@ from .query_store import QueryStore
 from .schema5 import SCHEMA5_DDL, ensure_schema5_columns, migrate_schema5
 from .schema6 import migrate_schema6
 from .schema7 import SCHEMA7_DDL, ensure_schema7_columns, migrate_schema7
-from . import epistemic
+from .schema8 import ensure_schema8_columns, migrate_schema8
+from . import epistemic, frozen_refs
 
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 ATTEMPT_STATES = frozenset({"open", "finished", "stopped", "unknown"})
 NODE_STATES = frozenset({"proposed", "open", "closed"})
 
@@ -95,6 +96,9 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
             if version == 6:
                 migrate_schema7(self.db_path)
                 version = 7
+            if version == 7 and SCHEMA_VERSION >= 8:
+                migrate_schema8(self.db_path)
+                version = 8
             if version not in {0, SCHEMA_VERSION}:
                 raise ValidationError(
                     f"Schema {version} must be migrated before native plugin writes"
@@ -228,7 +232,7 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
             CREATE TABLE IF NOT EXISTS counters (
                 name TEXT PRIMARY KEY, value INTEGER NOT NULL
             );
-            PRAGMA user_version=7;
+            PRAGMA user_version=8;
             """
         )
         db.executescript(DDL)
@@ -255,10 +259,11 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
             if statement.strip():
                 db.execute(statement)
         ensure_schema7_columns(db)
+        ensure_schema8_columns(db)
         for statement in SCHEMA7_DDL.split(";"):
             if statement.strip():
                 db.execute(statement)
-        db.execute("PRAGMA user_version=7")
+        db.execute("PRAGMA user_version=8")
 
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
@@ -466,6 +471,7 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
         predecessors: list[dict] | None = None,
         *,
         enforce_protocol: bool = False,
+        asserted_at: dict | None = None,
     ) -> dict:
         supplied_inputs = inputs is not None
         inputs = [] if inputs is None else inputs
@@ -494,7 +500,7 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
                 predecessor.get("rationale"), f"predecessors[{index}].rationale"
             )
             refs = predecessor.get("input_refs")
-            if not isinstance(refs, list) or not refs or not all(
+            if not isinstance(refs, list) or (relation_type == "depends_on" and not refs) or not all(
                 isinstance(ref, str) and ref.strip() for ref in refs
             ):
                 raise ValidationError("predecessor input_refs must be nonempty reference lists")
@@ -567,6 +573,7 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
                         "author": "research-agent",
                         "node_id": None,
                     },
+                    asserted_at=asserted_at or self._offline_asserted_at(request_id),
                 )
                 qref = knowledge["ref"]
                 kid, revision = parse_knowledge_ref(qref)
@@ -912,6 +919,7 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
         items: list[dict],
         request_id: str,
         knowledge_refs: list[str] | None = None,
+        *, asserted_at: dict | None = None,
     ) -> dict:
         if status not in {"partial", "complete"}:
             raise ValidationError("publication status must be partial or complete")
@@ -958,17 +966,20 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
             publish_bound = epistemic.read_bound(db)
             association = self._association(db, host_id, session_id)
             attempt = self._attempt(db, association["association_id"])
-            for ref in knowledge_refs:
-                kid, revision = parse_knowledge_ref(ref)
-                if not db.execute(
-                    "SELECT 1 FROM knowledge_revisions WHERE knowledge_id=? AND revision=?",
-                    (kid, revision),
-                ).fetchone():
-                    raise NotFoundError(f"Unknown research reference: {ref}")
+            for refs_to_check in [knowledge_refs, *(item["knowledge_refs"] for item in normalized)]:
+                if not isinstance(refs_to_check, list) or not all(isinstance(ref, str) for ref in refs_to_check):
+                    raise ValidationError("knowledge_refs must be research reference strings")
+                for ref in refs_to_check:
+                    kid, revision = parse_knowledge_ref(ref)
+                    if not db.execute(
+                        "SELECT 1 FROM knowledge_revisions WHERE knowledge_id=? AND revision=?",
+                        (kid, revision),
+                    ).fetchone():
+                        raise NotFoundError(f"Unknown research reference: {ref}")
             publication_id = self._next(db, "publication", "P")
             at = _now()
             db.execute(
-                "INSERT INTO publications VALUES (?,?,?,?,?,?,?)",
+                "INSERT INTO publications (publication_id,attempt_id,node_id,status,summary,gaps,created_at,asserted_at) VALUES (?,?,?,?,?,?,?,?)",
                 (
                     publication_id,
                     attempt["attempt_id"],
@@ -977,6 +988,7 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
                     summary,
                     _json(gaps),
                     at,
+                    _json(asserted_at or dict(host_id=host_id, session_id=session_id, turn=None, operation_id=request_id)),
                 ),
             )
             refs = []
@@ -1049,7 +1061,8 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
         return self._mutate("publish", payload, request_id, work)
 
     def relate(
-        self, source_ref: str, target_ref: str, label: str, note: str, request_id: str
+        self, source_ref: str, target_ref: str, label: str, note: str, request_id: str,
+        *, asserted_at: dict | None = None
     ) -> dict:
         epistemic.reject_reserved_relate(source_ref, target_ref, label)
         payload = {
@@ -1069,17 +1082,17 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
             }
             db.execute(
                 "INSERT INTO relations "
-                "(relation_id,source_ref,target_ref,label,note,created_at,relation_type,scheduling) "
-                "VALUES (?,?,?,?,?,?,'scientific',0)",
-                tuple(value.values()),
+                "(relation_id,source_ref,target_ref,label,note,created_at,relation_type,scheduling,asserted_at) "
+                "VALUES (?,?,?,?,?,?,'scientific',0,?)",
+                (*value.values(), _json(asserted_at or self._offline_asserted_at(request_id))),
             )
+            value["asserted_at"] = asserted_at or self._offline_asserted_at(request_id)
             self._event(db, "relation.created", value)
             return value
 
         return self._mutate("relate", payload, request_id, work)
 
-    @staticmethod
-    def _require_ref(db: sqlite3.Connection, ref: str) -> None:
+    def _require_ref(self, db: sqlite3.Connection, ref: str) -> None:
         if ref.startswith("knowledge/"):
             kid, revision = parse_knowledge_ref(ref)
             if db.execute(
@@ -1087,17 +1100,9 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
                 (kid, revision),
             ).fetchone():
                 return
-        if ref.startswith("pub/"):
-            publication_id, _, item_id = ref[4:].partition("#")
-            if item_id and db.execute(
-                "SELECT 1 FROM publication_items WHERE publication_id=? AND item_id=?",
-                (publication_id, item_id),
-            ).fetchone():
-                return
-            if not item_id and db.execute(
-                "SELECT 1 FROM publications WHERE publication_id=?", (publication_id,)
-            ).fetchone():
-                return
+        if frozen_refs.is_frozen(ref):
+            frozen_refs.require(db, self.root, ref)
+            return
         if db.execute("SELECT 1 FROM nodes WHERE node_id=?", (ref,)).fetchone():
             return
         if db.execute("SELECT 1 FROM legacy_refs WHERE ref=?", (ref,)).fetchone():
@@ -1118,8 +1123,8 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
                 (kid, revision),
             ).fetchone()
             return row["node_id"] if row else None
-        if ref.startswith("pub/"):
-            publication_id = ref[4:].partition("#")[0]
+        if frozen_refs.parse(ref).get("publication_id"):
+            publication_id = frozen_refs.parse(ref)["publication_id"]
             row = db.execute(
                 "SELECT node_id FROM publications WHERE publication_id=?", (publication_id,)
             ).fetchone()
@@ -1723,56 +1728,7 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
             ]
             result["usage"].update(self.workflow_usage(db))
             if ref:
-                if ref.startswith("knowledge/"):
-                    kid, revision = parse_knowledge_ref(ref)
-                    selected_knowledge = db.execute(
-                        "SELECT e.kind,e.node_id,r.* FROM knowledge_entries e "
-                        "JOIN knowledge_revisions r USING(knowledge_id) "
-                        "WHERE e.knowledge_id=? AND r.revision=?",
-                        (kid, revision),
-                    ).fetchone()
-                    if not selected_knowledge:
-                        raise NotFoundError(f"Unknown research reference: {ref}")
-                    result["selected"] = {
-                        "kind": "knowledge",
-                        "value": self._decode_knowledge(selected_knowledge),
-                    }
-                    return result
-                selected = db.execute("SELECT * FROM nodes WHERE node_id=?", (ref,)).fetchone()
-                if selected:
-                    value = dict(selected)
-                    value["inputs"] = json.loads(value["inputs"])
-                    result["selected"] = {"kind": "node", "value": value}
-                else:
-                    publication_id = ref[4:] if ref.startswith("pub/") and "#" not in ref else None
-                    publication = next(
-                        (item for item in publications if item["publication_id"] == publication_id),
-                        None,
-                    )
-                    if publication:
-                        result["selected"] = {"kind": "publication", "value": publication}
-                    else:
-                        legacy = db.execute(
-                            "SELECT * FROM legacy_refs WHERE ref=?", (ref,)
-                        ).fetchone()
-                        if legacy:
-                            value = dict(legacy)
-                            value["item"] = json.loads(value["item"])
-                            result["selected"] = {"kind": "legacy-ref", "value": value}
-                        else:
-                            item = next(
-                                (
-                                    publication_item
-                                    for publication_value in publications
-                                    for publication_item in publication_value["items"]
-                                    if publication_item["ref"] == ref
-                                ),
-                                None,
-                            )
-                            if item:
-                                result["selected"] = {"kind": "publication-item", "value": item}
-                            else:
-                                raise NotFoundError(f"Unknown research reference: {ref}")
+                result["selected"] = self.reference_query(ref, full=True)
             return result
 
     def memory_view(self, host_id: str, session_id: str, max_chars: int = 12_000) -> dict:

@@ -11,11 +11,13 @@ import json
 import sqlite3
 from typing import Any
 
+from . import frozen_refs
 from .errors import NotFoundError, ValidationError
 from .memory_store import parse_knowledge_ref
 
 
 COLLECTIONS = {
+    "hints": (None, None),  # Derived current-state collection, not a SQL table.
     "nodes": ("nodes", "rowid"),
     "attempts": ("attempts", "rowid"),
     "notes": ("notes", "rowid"),
@@ -53,6 +55,10 @@ class QueryStore:
     ) -> dict:
         value = dict(row)
         cursor = value.pop("_cursor")
+        if "asserted_at" in value:
+            value["asserted_at"] = json.loads(value["asserted_at"])
+        if "execution_refs" in value:
+            value["execution_refs"] = json.loads(value["execution_refs"])
         if collection == "impacts":
             # The row alone cannot be read: an affected version means nothing
             # without the path back to what changed, and the two predicates are
@@ -196,6 +202,14 @@ class QueryStore:
         value["cursor"] = cursor
         return value
 
+    def hints_query(self, *, limit: int = 8, offset: int = 0, node_id=None, klass=None) -> dict:
+        from .hints import structure_hints
+        with self._read() as db:
+            page = structure_hints(db, limit=max(1, min(int(limit), 200)),
+                                   offset=offset, node_id=node_id, klass=klass)
+        return {"collection": "hints", **page,
+                "cursor": {"offset": page["next_offset"]} if page["next_offset"] is not None else None}
+
     def history_page(
         self,
         collection: str,
@@ -205,7 +219,10 @@ class QueryStore:
         limit: int = 50,
         project_id: str | None = None,
         order: str | None = None,
+        offset: int = 0,
     ) -> dict:
+        if collection == "hints":
+            return self.hints_query(limit=limit, offset=offset)
         if collection not in COLLECTIONS:
             raise ValidationError(f"Unsupported history collection: {collection}")
         table, key = COLLECTIONS[collection]
@@ -321,8 +338,38 @@ class QueryStore:
                 "has_more": len(rows) > limit,
             }
 
+    def _frozen_query(self, db, ref, *, full=False):
+        resolution = frozen_refs.resolve(db, self.root, ref)
+        if resolution["outcome"] == "not_found":
+            raise NotFoundError(resolution["message"])
+        if resolution["outcome"] == "unsupported":
+            raise ValidationError(resolution["message"])
+        kind = resolution["kind"].replace("_", "-")
+        value = {}
+        if resolution.get("publication_id"):
+            row = db.execute("SELECT rowid AS _cursor,* FROM publications WHERE publication_id=?",
+                             (resolution["publication_id"],)).fetchone()
+            if row:
+                value = self._decode_page_row(db, "publications", row, full=full)
+                if resolution.get("item_id"):
+                    value = next((i for i in value["items"] if i["item_id"] == resolution["item_id"]), {})
+        elif resolution.get("snapshot_id"):
+            if resolution["kind"] == "snapshot":
+                row = db.execute("SELECT rowid AS _cursor,* FROM snapshots WHERE snapshot_id=?",
+                                 (resolution["snapshot_id"],)).fetchone()
+                value = self._decode_page_row(db, "snapshots", row, full=full)
+            else:
+                value = {**resolution.get("entry", {}), "snapshot_id": resolution["snapshot_id"]}
+        if resolution.get("subpath"):
+            value["subpath"] = resolution["subpath"]
+        return {"kind": kind, "value": value, "resolution": resolution}
+
     def reference_query(self, ref: str, *, full: bool = False) -> dict:
         with self._read() as db:
+            if frozen_refs.is_frozen(ref) and not db.execute(
+                "SELECT 1 FROM specialist_tasks WHERE task_id=?", (ref,)
+            ).fetchone():
+                return self._frozen_query(db, ref, full=full)
             if ref.startswith("knowledge/"):
                 kid, revision = parse_knowledge_ref(ref)
                 row = db.execute(
@@ -341,23 +388,6 @@ class QueryStore:
                     "kind": "node",
                     "value": self._decode_page_row(db, "nodes", node, full=full),
                 }
-            if ref.startswith("pub/"):
-                publication_id, _, item_id = ref[4:].partition("#")
-                publication = db.execute(
-                    "SELECT rowid AS _cursor,* FROM publications WHERE publication_id=?",
-                    (publication_id,),
-                ).fetchone()
-                if publication:
-                    decoded = self._decode_page_row(db, "publications", publication, full=full)
-                    if item_id:
-                        item = next(
-                            (value for value in decoded["items"] if value["item_id"] == item_id),
-                            None,
-                        )
-                        if item:
-                            return {"kind": "publication-item", "value": item}
-                    else:
-                        return {"kind": "publication", "value": decoded}
             note = db.execute(
                 "SELECT rowid AS _cursor,* FROM notes WHERE note_id=?", (ref,)
             ).fetchone()
@@ -365,14 +395,6 @@ class QueryStore:
                 return {
                     "kind": "note",
                     "value": self._decode_page_row(db, "notes", note, full=full),
-                }
-            snapshot = db.execute(
-                "SELECT rowid AS _cursor,* FROM snapshots WHERE snapshot_id=?", (ref,)
-            ).fetchone()
-            if snapshot:
-                return {
-                    "kind": "snapshot",
-                    "value": self._decode_page_row(db, "snapshots", snapshot, full=full),
                 }
             attempt = db.execute(
                 "SELECT rowid AS _cursor,* FROM attempts WHERE attempt_id=?", (ref,)
@@ -446,6 +468,8 @@ class QueryStore:
                         "SELECT * FROM owned_goals WHERE association_id=?",
                         (association["association_id"],),
                     ).fetchone()
+            from .hints import structure_hints
+            hints = structure_hints(db)
             workflow = self.workflow_control(db, session_id)
             usage = db.execute(
                 "SELECT COALESCE(SUM(amount),0) known,"
@@ -478,7 +502,7 @@ class QueryStore:
                 )
             ]
             return {
-                "schema_version": 7,
+                "schema_version": 8,
                 "project": project,
                 "association": dict(association) if association else None,
                 "attempt": {**dict(attempt), "details": json.loads(attempt["details"])}
@@ -497,9 +521,11 @@ class QueryStore:
                     ),
                     "semantics": "advisory-consolidation-queue",
                 },
+                "structure_hints": hints,
                 "counts": {
-                    collection: int(db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
-                    for collection, (table, _) in COLLECTIONS.items()
+                    **{collection: int(db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+                       for collection, (table, _) in COLLECTIONS.items() if table is not None},
+                    "hints": hints["total"],
                 },
                 "pagination": {
                     "default_limit": 50,

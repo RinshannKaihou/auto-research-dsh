@@ -18,11 +18,15 @@ export function projectGraph(state) {
     if (legacy.has(ref)) return owner(legacy.get(ref));
     if (attempts.has(ref)) return owner(attempts.get(ref));
     if (snapshots.has(ref)) return owner(snapshots.get(ref));
+    if (ref.startsWith('S-')) return owner(snapshots.get(ref.split('#',1)[0])); // display only
     if (knowledge.has(ref)) return owner(knowledge.get(ref));
     if (ref.startsWith('pub/')) {
-      const [id,itemId] = ref.slice(4).split('#');
-      const p = pubs.get(id);
-      if (!p || (itemId !== undefined && !(p.items ?? []).some(i => i.item_id === itemId))) return null;
+      // Display ownership only. Availability is exclusively reference.get's resolution.
+      const hash = ref.indexOf('#'), head = hash < 0 ? ref : ref.slice(0,hash);
+      const p = pubs.get(head.slice(4));
+      // Only attach graph records to declared owners; this does not enable opening.
+      const itemId = hash < 0 ? null : ref.slice(hash+1).split('/',1)[0];
+      if (itemId !== null && !(p?.items ?? []).some(item=>item.item_id===itemId)) return null;
       return owner(p);
     }
     return null;

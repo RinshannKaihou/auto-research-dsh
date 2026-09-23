@@ -86,7 +86,7 @@ export function registerResearchTools(ctx, domain) {
     tool(domain, {
       name: 'research_query',
       method: 'query',
-      description: 'Read a bounded research summary, retrieve a fixed reference, search knowledge, or page a collection. Use the returned cursor to continue.',
+      description: 'Read a bounded research summary, retrieve a fixed reference, search knowledge, or page a collection. Use the returned cursor to continue. collection="hints" lists current-state structural candidates; use offset/limit to page and kind to filter the hint class. It does not replay historical boundaries.',
       parameters: {
         ref: { type: 'string' }, query: { type: 'string' }, collection: { type: 'string' },
         node_id: { type: 'string' }, kind: { type: 'string' }, after: { type: 'number' },
@@ -99,7 +99,7 @@ export function registerResearchTools(ctx, domain) {
     tool(domain, {
       name: 'research_propose',
       method: 'propose',
-      description: 'Atomically propose a node as an independent root with root_reason or a derived node with typed predecessors and fixed input_refs. A real predecessor must be declared; a handoff error does not make the successor a root. depends_on controls scheduling; branches_from and revises are scientific lineage only.',
+      description: 'Atomically propose a node as an independent root with root_reason or a derived node with typed predecessors and fixed input_refs. A real predecessor must be declared; a handoff error does not make the successor a root. depends_on controls scheduling; branches_from and revises are scientific lineage only and may have empty input_refs; depends_on requires material inputs.',
       parameters: {
         question: { type: 'string', required: true },
         why_now: { type: 'string', required: true },
@@ -146,7 +146,7 @@ export function registerResearchTools(ctx, domain) {
     }),
     tool(domain, {
       name: 'research_memory',
-      description: 'Record or revise sourced knowledge, checkpoint the current node, dispose of an impact, or run consolidation. For record, omitted node_id defaults to the current work segment node. Project-wide placement requires visibility="project" explicitly; without a current node supply node_id or project visibility. Placement is retrieval context, not access isolation; keep scientific applicability in conditions/scope. In manual mode consolidate only when the user explicitly asks. Claims, observations, and lessons require evidence_refs. Retracting requires change_kind="retract" together with affected_scope_mode="versions" naming the version withdrawn. Every revise must declare affected_scope_mode: "versions" with the exact versions it invalidates, "none" if it invalidates nothing, or "unknown" if you cannot tell. Use relations[] with grounded_in for what a statement rests on (it becomes the basis and propagates), and motivated_by for what merely prompted the work (it does not propagate); for an open question, a prior finding is grounded_in when the question presupposes it and motivated_by when it only explains why this node was chosen now.',
+      description: 'Record or revise sourced knowledge, checkpoint the current node, dispose of an impact, or run consolidation. Revise never inherits execution_refs: omitting it stores []; supply the references again even when the result sources are unchanged. For record, omitted node_id defaults to the current work segment node. Project-wide placement requires visibility="project" explicitly; without a current node supply node_id or project visibility. Placement is retrieval context, not access isolation; keep scientific applicability in conditions/scope. In manual mode consolidate only when the user explicitly asks. Claims, observations, and lessons require evidence_refs. S-xxx#path identifies an entry inside a frozen snapshot. Bare S-xxx evidence on claims or observations produces an advisory candidate hint. Retracting requires change_kind="retract" together with affected_scope_mode="versions" naming the version withdrawn. Every revise must declare affected_scope_mode: "versions" with the exact versions it invalidates, "none" if it invalidates nothing, or "unknown" if you cannot tell. Use relations[] with grounded_in for what a statement rests on (it becomes the basis and propagates), and motivated_by for what merely prompted the work (it does not propagate); for an open question, a prior finding is grounded_in when the question presupposes it and motivated_by when it only explains why this node was chosen now.',
       parameters: {
         action: { type: 'string', required: true, enum: ['record', 'revise', 'checkpoint', 'consolidate', 'dispose', 'narrow_scope'] },
         kind: { type: 'string', enum: ['observation', 'hypothesis', 'lesson', 'decision', 'open_question', 'claim'] },
@@ -156,6 +156,7 @@ export function registerResearchTools(ctx, domain) {
         conditions: { type: 'object', additionalProperties: true, properties: {} },
         evidence_refs: { type: 'array', items: { type: 'string' } },
         dependencies: { type: 'array', items: { type: 'string' } },
+        execution_refs: { type: 'array', items: { type: 'string' }, description: 'Optional execution references for this write: session:, attempt:, event:, or frozen object references. Unresolved references are retained as unlinked. On revise, omission stores an empty list, never inherited; explicitly supply execution_refs again if the result sources are unchanged. asserted_at is server-managed.' },
         motivated_by: { type: 'array', items: { type: 'string' } },
         relations: {
           type: 'array',

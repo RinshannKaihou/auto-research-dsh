@@ -7,6 +7,8 @@ browser or model.
 
 from __future__ import annotations
 
+from . import frozen_refs
+
 import argparse
 import hashlib
 import json
@@ -20,6 +22,7 @@ import tempfile
 from .artifacts import ArtifactStore, _open_source
 from .migration import preflight, recovery_preview
 from .native_store import NativeStore
+from .errors import ValidationError
 
 MAX_REQUEST = 64 * 1024
 MAX_RESPONSE = 4 * 1024 * 1024
@@ -388,64 +391,58 @@ class NativeService:
         index = []
         seen: set[str] = set()
 
-        def add_publication_item(declared_ref: str, item: dict) -> None:
-            concrete_ref = f"pub/{item['publication_id']}#{item['item_id']}"
+        def add_frozen(declared_ref, concrete_ref):
             if concrete_ref in seen:
                 return
             seen.add(concrete_ref)
-            entry = {
-                "ref": concrete_ref,
-                "declared_ref": declared_ref,
-                "materialized": False,
-                "kind": item["kind"],
-                "content": item["content"],
-                "publication_id": item["publication_id"],
-            }
-            if item.get("object_version"):
-                archived = root / ".research" / "objects" / item["object_version"]
-                if not archived.exists():
-                    raise ValueError(
-                        f"Frozen object is missing for research input {concrete_ref}: "
-                        f"{item['object_version']}"
-                    )
-                object_kind = item.get("object_kind") or (
-                    "directory" if archived.is_dir() else "file"
-                )
-                if object_kind not in {"file", "directory"} or (
-                    object_kind == "directory"
-                ) != archived.is_dir():
-                    raise ValueError(
-                        f"Frozen object kind does not match for research input {concrete_ref}"
-                    )
+            with store._read() as db:
+                resolution, source = frozen_refs.open(db, root, concrete_ref)
+            content_only = (
+                resolution["kind"] == "publication_item"
+                and resolution["reason"] == "not_an_object"
+            )
+            if resolution["outcome"] != "resolved" and not content_only:
+                raise ValueError(resolution["message"])
+            selected = store.reference_query(concrete_ref, full=True)
+            item = selected["value"]
+            entry = {"ref": concrete_ref, "declared_ref": declared_ref, "materialized": False,
+                     "kind": item.get("kind", selected["kind"]), "content": item.get("content"),
+                     "resolution": resolution}
+            if resolution.get("publication_id"):
+                entry["publication_id"] = resolution["publication_id"]
+            if source is not None:
+                obj = resolution["object"]
                 token = hashlib.sha256(concrete_ref.encode()).hexdigest()[:16]
-                materialized.append(
-                    {
-                        "node_id": "input",
-                        "product_id": f"ref-{token}",
-                        "product": {
-                            "path": f".research/objects/{item['object_version']}",
-                            "version": item["object_version"],
-                            "kind": object_kind,
-                        },
-                    }
-                )
-                entry["materialized"] = True
-                entry["path"] = f"inputs/input/ref-{token}"
+                product = {**obj, "path": f".research/objects/{obj['version']}"}
+                if resolution.get("subpath"):
+                    product["subpath"] = resolution["subpath"]
+                materialized.append({"node_id": "input", "product_id": f"ref-{token}", "product": product})
+                entry.update(materialized=True, path=f"inputs/input/ref-{token}")
             index.append(entry)
 
         for ref in refs:
             product = None
+            if frozen_refs.is_frozen(ref):
+                with store._read() as db:
+                    resolution = frozen_refs.resolve(db, root, ref)
+                    if resolution["outcome"] != "resolved":
+                        raise ValueError(resolution["message"])
+                    if resolution["kind"] == "snapshot":
+                        raise ValueError(
+                            f"Research reference cannot be used as an input: {ref} (snapshot)"
+                        )
+                    items = list(db.execute("SELECT item_id FROM publication_items WHERE publication_id=? ORDER BY item_id",
+                                            (resolution["publication_id"],))) if resolution["kind"] == "publication" else None
+                if items is not None:
+                    for item in items:
+                        add_frozen(ref, f"pub/{resolution['publication_id']}#{item['item_id']}")
+                else:
+                    add_frozen(ref, ref)
+                continue
             try:
                 selected = store.reference_query(ref, full=True)
             except Exception as exc:
                 raise ValueError(f"Research input does not exist: {ref}") from exc
-            if selected["kind"] == "publication-item":
-                add_publication_item(ref, selected["value"])
-                continue
-            if selected["kind"] == "publication":
-                for item in selected["value"].get("items", []):
-                    add_publication_item(ref, item)
-                continue
             entry = {"ref": ref, "declared_ref": ref, "materialized": False}
             if selected["kind"] == "legacy-ref":
                 old = selected["value"]
@@ -535,7 +532,8 @@ class NativeService:
         workspace.mkdir(parents=True, exist_ok=True)
         refs = set(node.get("inputs", []))
         referenced_publications = {
-            ref[4:].split("#", 1)[0] for ref in refs if ref.startswith("pub/")
+            parsed["publication_id"] for ref in refs
+            if (parsed := frozen_refs.parse(ref)).get("publication_id")
         }
         with store._connection() as db:
             attempt_ids = {
@@ -571,28 +569,22 @@ class NativeService:
             "notes": notes,
             "instruction": "Discuss these frozen references. Query for newer records explicitly. Do not mutate the research ledger or dispatch research.",
         }
-        index = []
+        material_refs = [f"pub/{p['publication_id']}" for p in publications]
+        # Discussion ignores context-only inputs. Dispatch validation remains
+        # stricter; a whole snapshot is neither expanded nor materialized here.
+        material_refs.extend(
+            ref for ref in node.get("inputs", [])
+            if ref not in material_refs
+            and frozen_refs.parse(ref).get("form") in {
+                "publication", "publication_item", "snapshot_entry"
+            }
+        )
+        index, materialized = self._resolve_branch_inputs(store, root, material_refs)
         artifacts = ArtifactStore(root)
-        for publication in publications:
-            for item in publication["items"]:
-                entry = {"ref": item["ref"], "content": item["content"]}
-                if item.get("object_version"):
-                    version = item["object_version"]
-                    destination = (
-                        workspace / "inputs" / publication["publication_id"] / item["item_id"]
-                    )
-                    destination.parent.mkdir(parents=True, exist_ok=True)
-                    artifacts.materialize(
-                        {
-                            "path": f".research/objects/{version}",
-                            "version": version,
-                            "kind": item.get("object_kind") or "file",
-                        },
-                        destination,
-                        readonly=True,
-                    )
-                    entry["path"] = str(destination.relative_to(workspace))
-                index.append(entry)
+        for item in materialized:
+            destination = workspace / "inputs" / item["node_id"] / item["product_id"]
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            artifacts.materialize(item["product"], destination, readonly=True)
         context["material_index"] = index
         # Keep the full frozen record on disk; IPC and system context carry a bounded view.
         self._write_intent(workspace / "RESEARCH_CONTEXT.json", context)
@@ -615,6 +607,15 @@ class NativeService:
         self._write_intent(intent, value)
         return value
 
+    def _asserted_at(self, store, request, host_id, session_id):
+        if "asserted_at" in request:
+            raise ValidationError("asserted_at is server-managed")
+        turn = request.get("turn")
+        if turn is None:
+            with store._read() as db:
+                turn = db.execute("SELECT MAX(turn) FROM turn_bindings WHERE host_id=? AND session_id=?", (host_id, session_id)).fetchone()[0]
+        return dict(host_id=host_id, session_id=session_id, turn=turn, operation_id=self._operation(request))
+
     def handle(self, request: dict) -> dict:
         transport_id = request.get("transport_id", request.get("request_id"))
         if not isinstance(transport_id, str) or not transport_id or len(transport_id) > 128:
@@ -622,7 +623,7 @@ class NativeService:
         method = request.get("method")
         if method == "capabilities":
             value = {
-                "schema_version": 7,
+                "schema_version": 8,
                 "execution_owner": "dsh",
                 "model_loop": "native-goals",
                 "manual_research": True,
@@ -892,6 +893,9 @@ class NativeService:
                     )
                 elif request.get("ref"):
                     value = store.reference_query(request["ref"])
+                elif request.get("collection") == "hints":
+                    value = store.hints_query(limit=request.get("limit", 8), offset=request.get("offset", 0),
+                                              node_id=request.get("node_id"), klass=request.get("kind"))
                 elif any(
                     request.get(key) is not None
                     for key in ("query", "kind", "node_id", "status", "revision", "conditions")
@@ -930,6 +934,7 @@ class NativeService:
             elif method == "history_page":
                 value = store.history_page(
                     request.get("collection"),
+                    offset=request.get("offset", 0),
                     after=request.get("after", 0),
                     upper_id=request.get("upper_id"),
                     limit=request.get("limit", 50),
@@ -957,18 +962,19 @@ class NativeService:
                 action = request.get("action")
                 fields = {
                     **request.get("fields", {}),
-                    "source_identity": {
-                        "host_id": host_id,
-                        "session_id": session_id,
-                        **request.get("fields", {}).get("source_identity", {}),
-                    },
+                    "source_identity": request.get("fields", {}).get("source_identity", {
+                        "host_id": host_id, "session_id": session_id,
+                    }),
                 }
+                store._reject_asserted_at(fields)
                 if action == "record":
                     value = store.record_knowledge(
-                        fields, self._operation(request), execution_identity=(host_id, session_id)
+                        fields, self._operation(request), execution_identity=(host_id, session_id),
+                        asserted_at=self._asserted_at(store, request, host_id, session_id)
                     )
                 elif action == "revise":
-                    value = store.revise_knowledge(fields, self._operation(request))
+                    value = store.revise_knowledge(fields, self._operation(request),
+                        asserted_at=self._asserted_at(store, request, host_id, session_id))
                 elif action == "checkpoint":
                     value = store.checkpoint(fields, self._operation(request))
                 elif action == "dispose":
@@ -1003,9 +1009,16 @@ class NativeService:
                     if not fields.get("inputs"):
                         raise ValueError("Blind review requires frozen file publication-item inputs")
                     for ref in fields["inputs"]:
-                        selected = store.reference_query(ref, full=True)
-                        if selected["kind"] != "publication-item" or selected["value"].get("object_kind") != "file" or not selected["value"].get("object_version"):
-                            raise ValueError("Blind inputs must be frozen file publication-item references")
+                        if not frozen_refs.is_frozen(ref):
+                            raise ValueError("Blind inputs must be frozen file references")
+                        with store._read() as db:
+                            resolution = frozen_refs.require(db, root, ref)
+                        obj = resolution["object"]
+                        path = root / ".research" / "objects" / obj["version"] if obj else None
+                        if path and resolution.get("subpath"):
+                            path = path / resolution["subpath"]
+                        if path is None or not path.is_file():
+                            raise ValueError(f"{ref}: not_an_object")
                 value = store.specialist_create(
                     {
                         **fields,
@@ -1031,12 +1044,12 @@ class NativeService:
                 allowed = {f"input-{i + 1}": ref for i, ref in enumerate(refs)}
                 if input_id not in allowed:
                     raise ValueError("Input is not assigned to this specialist")
-                selected = store.reference_query(allowed[input_id], full=True)
-                item = selected["value"]
-                if selected["kind"] != "publication-item" or item.get("object_kind") != "file":
-                    raise ValueError("Input is not a frozen file")
-                version = item["object_version"]
-                source = ArtifactStore(root).verify({"path": f".research/objects/{version}", "version": version, "kind": "file"})
+                with store._read() as db:
+                    resolution, source = frozen_refs.open(db, root, allowed[input_id])
+                if resolution["outcome"] != "resolved":
+                    raise ValueError(resolution["message"])
+                if not source.is_file():
+                    raise ValueError(f"{allowed[input_id]}: not_an_object")
                 offset, limit = max(0, int(request.get("offset", 0))), max(1, min(8192, int(request.get("limit", 8192))))
                 content = source.read_text(encoding="utf-8")
                 end = min(len(content), offset + limit)
@@ -1118,6 +1131,7 @@ class NativeService:
                     request.get("root_reason"),
                     request.get("predecessors"),
                     enforce_protocol=bool(request.get("model_call")),
+                    asserted_at=self._asserted_at(store, request, host_id, session_id),
                 )
             elif method == "consume":
                 value = store.consume(
@@ -1167,6 +1181,7 @@ class NativeService:
                     items,
                     operation_id,
                     request.get("knowledge_refs", []),
+                    asserted_at=self._asserted_at(store, request, host_id, session_id),
                 )
             elif method == "relate":
                 value = store.relate(
@@ -1175,6 +1190,7 @@ class NativeService:
                     request.get("label"),
                     request.get("note"),
                     self._operation(request),
+                    asserted_at=self._asserted_at(store, request, host_id, session_id),
                 )
             elif method == "finish":
                 value = store.finish(

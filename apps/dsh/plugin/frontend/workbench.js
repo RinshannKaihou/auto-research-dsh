@@ -7,6 +7,7 @@ export function createWorkbench(React, rpc, openSession, projectGraph, ResearchG
     const [knowledgeSearch,setKnowledgeSearch]=React.useState(''),[guidancePath,setGuidancePath]=React.useState(''),[guidanceVersion,setGuidanceVersion]=React.useState('');
     const [selected,setSelected]=React.useState(null),[edgeId,setEdgeId]=React.useState(null),[search,setSearch]=React.useState(''),[filter,setFilter]=React.useState('all');
     const [view,setView]=React.useState(()=>window.matchMedia('(max-width:600px)').matches?'list':'graph');
+    const hintOffset=React.useRef(0);
     const lifecycle=React.useRef(0),requestSeq=React.useRef(0),pending=React.useRef(false),lastState=React.useRef(null);
     const call=React.useCallback(async(endpoint,payload={})=>{
       const response=await rpc(endpoint,{sessionId,operationId:`${sessionId}:ui:${crypto.randomUUID()}`,...payload});
@@ -27,9 +28,12 @@ export function createWorkbench(React, rpc, openSession, projectGraph, ResearchG
           if(!['nodes','attempts','impacts','review_todos','specialists','sessions','tasks'].includes(name)&&previous&&previous.counts?.[name]===summary.counts?.[name]&&previous[name])return[name,previous[name]];
           return[name,await loadCollection(name)];
         }));
-        const value={...summary,...Object.fromEntries(loaded),context_preview:contextPreview,guidance};
+        const initialHints=summary.structure_hints??{items:[],total:0,shown_count:0,offset:0,next_offset:null};
+        const offset=Math.min(hintOffset.current,Math.floor(Math.max(0,initialHints.total-1)/8)*8);
+        const hints=offset?await call('history.page',{collection:'hints',cursor:{offset},limit:8}):initialHints;
+        const value={...summary,...Object.fromEntries(loaded),structure_hints:hints,context_preview:contextPreview,guidance};
         if(life!==lifecycle.current||seq!==requestSeq.current)return;
-        lastState.current=value;setState(value);setError(null);setUpdated(new Date());
+        hintOffset.current=offset;lastState.current=value;setState(value);setError(null);setUpdated(new Date());
       }
       catch(e){if(life===lifecycle.current&&seq===requestSeq.current)setError(e.message);}
     },[call,loadCollection]);
@@ -59,7 +63,7 @@ export function createWorkbench(React, rpc, openSession, projectGraph, ResearchG
       finally{if(life===lifecycle.current){pending.current=false;setBusy(false);}}
     }
     async function navigate(id){try{await openSession(id);}catch(e){setNotice(`无法打开原生会话：${e.message}`);}}
-    async function inspectReference(ref){try{setReferencePreview(await call('reference.get',{ref}));}catch(e){setNotice(`无法读取研究材料：${e.message}`);}}
+    async function inspectReference(ref){setReferencePreview(null);try{setReferencePreview(await call('reference.get',{ref}));}catch(e){setNotice(`无法读取研究材料：${e.message}`);}}
     const select=id=>{setSelected(id);setEdgeId(null);};
     const btn=(label,endpoint,payload={},off=disabled)=>h('button',{disabled:off,onClick:()=>act(endpoint,payload)},label);
     return h('div',{className:'ari-v5','aria-busy':busy},h('style',null,researchStyles),
@@ -88,7 +92,7 @@ export function createWorkbench(React, rpc, openSession, projectGraph, ResearchG
           h('button',{onClick:()=>navigate(a.session_id)},'打开审批会话')))),
       error&&h('div',{className:'ari-alert',role:'alert'},state?'连接异常，保留最后成功数据。':'暂时无法读取项目。',` ${error}`,h('button',{onClick:refresh},'重试')),
       notice&&h('p',{role:'status'},notice),
-      referencePreview&&h('section',{className:'ari-section','aria-label':'研究材料'},h('h3',null,'研究材料'),h('pre',null,JSON.stringify(referencePreview,null,2)),h('button',{onClick:()=>setReferencePreview(null)},'关闭材料')),
+      referencePreview&&h('section',{className:'ari-section','aria-label':'研究材料','data-resolution-outcome':referencePreview.resolution?.outcome,'data-resolution-reason':referencePreview.resolution?.reason,role:referencePreview.resolution&&referencePreview.resolution.outcome!=='resolved'?'alert':undefined},h('h3',null,referencePreview.resolution&&referencePreview.resolution.outcome!=='resolved'?`材料不可打开：${referencePreview.resolution.reason}`:'研究材料'),h('pre',null,JSON.stringify(referencePreview,null,2)),h('button',{onClick:()=>setReferencePreview(null)},'关闭材料')),
       preview&&h('section',{className:'ari-section','aria-label':'接手预览'},h('h3',null,'历史文件快照 · 接手预览'),
         h('p',null,`来源：${preview.context.source_attempt_id} · 目标目录：${preview.workspace}`),
         h('pre',null,JSON.stringify(preview.context,null,2)),h('p',null,`未完整保存：${preview.missing.length} 项`),
@@ -118,11 +122,22 @@ export function createWorkbench(React, rpc, openSession, projectGraph, ResearchG
           ...knowledgeRows.map(item=>h('article',{key:item.ref},h('strong',null,`${item.ref} · ${item.kind} · ${item.status}`),
             h('p',{className:'ari-preserve'},typeof item.statement==='string'?item.statement:item.statement?.preview),
             h('p',null,h('strong',null,'证据引用：'),item.evidence_refs?.length?item.evidence_refs.map(ref=>h('button',{key:ref,onClick:()=>inspectReference(ref)},ref)):'未关联证据'),
-            h('p',null,h('strong',null,'记录来源：'),item.source_identity&&Object.keys(item.source_identity).length?JSON.stringify(item.source_identity):'未填写',item.source_identity?.session_id&&h('button',{onClick:()=>navigate(item.source_identity.session_id)},'打开来源会话')),
+            h('p',null,h('strong',null,'记账来源：'),item.asserted_at?JSON.stringify(item.asserted_at):'历史记录，无来源'),
+            ...(item.execution_refs??[]).map((ref,index)=>h('p',{key:`execution-${index}`},`执行来源：${ref.ref} · ${ref.status==='linked'?'已关联':`未关联 · ${ref.reason}`}`)),
+            h('p',null,h('strong',null,'自述来源：'),item.source_identity&&Object.keys(item.source_identity).length?JSON.stringify(item.source_identity):'未填写',item.source_identity?.session_id&&h('button',{onClick:()=>navigate(item.source_identity.session_id)},'打开来源会话')),
             h('p',null,h('strong',null,'适用范围：'),item.scope&&Object.keys(item.scope).length?JSON.stringify(item.scope):'未填写'),
             h('p',null,h('strong',null,'适用条件：'),item.conditions&&Object.keys(item.conditions).length?JSON.stringify(item.conditions):'未填写'),
             item.supersedes?.length>0&&h('p',null,h('strong',null,'修订历史：'),...item.supersedes.map(ref=>h('button',{key:ref,onClick:()=>inspectReference(ref)},ref))))),
           !knowledgeRows.length&&h('p',{className:'ari-empty'},'没有匹配的知识条目。')),
+        h('details',{className:'ari-section',open:true,'aria-label':'结构候选提示'},h('summary',null,`结构候选提示 · 显示 ${state.structure_hints.shown_count} / ${state.structure_hints.total}`),
+          h('p',null,'这些线索仅供复核，不会自动补边或阻止研究。'),
+          ...state.structure_hints.items.map((item,index)=>h('article',{key:index},
+            h('strong',null,`候选 · ${item.target}`),
+            h('p',null,({prose_mention_without_relation:'正文提及尚无结构关联',whole_snapshot_evidence:'证据指向整份快照',lineage_mention_without_predecessor:'提及其他节点但未声明前驱',complete_publication_cites_risk:'完整发布仍引用有风险的依据'})[item.class]),
+            h('p',null,JSON.stringify(item.evidence)),
+            h('p',null,`修复记录：${item.repair_evidence.length?item.repair_evidence.join('、'):'无'}`))),
+          h('button',{disabled:disabled||hintOffset.current===0,onClick:()=>{hintOffset.current=Math.max(0,hintOffset.current-8);return refresh();}},'上一页'),
+          h('button',{disabled:disabled||state.structure_hints.next_offset==null,onClick:()=>{hintOffset.current=state.structure_hints.next_offset;return refresh();}},'下一页')),
         h('details',{className:'ari-section'},h('summary',null,`节点检查点 · ${state.checkpoints.length}`),...state.checkpoints.map(item=>h('article',{key:item.checkpoint_id},h('strong',null,`${item.node_id??'项目规划'} · revision ${item.revision}`),h('pre',null,JSON.stringify(item.state,null,2))))),
         h('details',{className:'ari-section'},h('summary',null,`整理与复核待办 · ${(state.review_todos??[]).filter(item=>item.state!=='completed').length}`),...(state.review_todos??[]).filter(item=>item.state!=='completed').map(item=>h('p',{key:item.todo_id},`${item.todo_id} · ${item.node_id??'项目规划'} · ${item.trigger_kind} · ${item.trigger_ref} · ${item.state}`))),
         h('details',{className:'ari-section'},h('summary',null,`当前上下文来源 · ${state.context_preview.status}`),h('p',null,`摘要：${state.context_preview.source_digest??'无'} · ${state.context_preview.truncated?'已按内容块裁剪':'完整'}`),state.context_preview.error&&h('p',{role:'alert'},state.context_preview.error),h('pre',null,state.context_preview.text)),

@@ -6,6 +6,8 @@ read-only projections and can always be rebuilt from these tables.
 
 from __future__ import annotations
 
+from . import frozen_refs
+
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -156,16 +158,17 @@ def tokenize(text: str) -> tuple[str, str, str]:
 # Explicit column list. The historical statements were positional with
 # thirteen placeholders, so schema 7's added ``motivated_by`` column broke
 # them silently at write time; never reintroduce ``VALUES(?,?,...)`` here.
-_REVISION_COLUMNS = (
+_LEGACY_REVISION_COLUMNS = (
     "knowledge_id,revision,statement,scope,conditions,status,evidence_refs,"
     "source_identity,dependencies,supersedes,author,created_at,source_sequence"
 )
+_REVISION_COLUMNS = _LEGACY_REVISION_COLUMNS + ",motivated_by,asserted_at,execution_refs"
 _REVISION_INSERT = (
-    f"INSERT INTO knowledge_revisions ({_REVISION_COLUMNS},motivated_by)"
-    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+    f"INSERT INTO knowledge_revisions ({_REVISION_COLUMNS})"
+    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
 )
 _REVISION_INSERT_IGNORE = (
-    f"INSERT OR IGNORE INTO knowledge_revisions ({_REVISION_COLUMNS})"
+    f"INSERT OR IGNORE INTO knowledge_revisions ({_LEGACY_REVISION_COLUMNS})"
     " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)"
 )
 
@@ -370,11 +373,12 @@ class MemoryStore:
             value[key] = json.loads(value[key])
         # Added by schema 7; decode it too or it leaks as a raw JSON string.
         value["motivated_by"] = json.loads(value.get("motivated_by") or "[]")
+        value["asserted_at"] = json.loads(value.get("asserted_at") or "null")
+        value["execution_refs"] = json.loads(value.get("execution_refs") or "[]")
         value["ref"] = _knowledge_ref(value["knowledge_id"], value["revision"])
         return value
 
-    @staticmethod
-    def _validate_evidence(db: sqlite3.Connection, refs: list[str]) -> None:
+    def _validate_evidence(self, db: sqlite3.Connection, refs: list[str]) -> None:
         for ref in refs:
             if ref.startswith("knowledge/"):
                 kid, revision = parse_knowledge_ref(ref)
@@ -384,27 +388,12 @@ class MemoryStore:
                 ).fetchone():
                     raise NotFoundError(f"Unknown research reference: {ref}")
             else:
-                MemoryStore._require_legacy_ref(db, ref)
+                self._require_legacy_ref(db, ref)
 
-    @staticmethod
-    def _require_legacy_ref(db: sqlite3.Connection, ref: str) -> None:
-        if ref.startswith("pub/"):
-            pid, _, item = ref[4:].partition("#")
-            if (
-                item
-                and db.execute(
-                    "SELECT 1 FROM publication_items WHERE publication_id=? AND item_id=?",
-                    (pid, item),
-                ).fetchone()
-            ):
-                return
-            if (
-                not item
-                and db.execute(
-                    "SELECT 1 FROM publications WHERE publication_id=?", (pid,)
-                ).fetchone()
-            ):
-                return
+    def _require_legacy_ref(self, db: sqlite3.Connection, ref: str) -> None:
+        if frozen_refs.is_frozen(ref):
+            frozen_refs.require(db, self.root, ref)
+            return
         if db.execute("SELECT 1 FROM nodes WHERE node_id=?", (ref,)).fetchone():
             return
         if db.execute("SELECT 1 FROM legacy_refs WHERE ref=?", (ref,)).fetchone():
@@ -438,7 +427,7 @@ class MemoryStore:
             pass
 
     def _write_relations_in_tx(
-        self, db: sqlite3.Connection, version_ref: str, relations: list, created_at: str
+        self, db: sqlite3.Connection, version_ref: str, relations: list, created_at: str, asserted_at: dict | None = None
     ) -> list:
         epistemic = _epistemic()
         checked = epistemic.normalise_relations(relations, version_ref)
@@ -446,7 +435,8 @@ class MemoryStore:
             db,
             version_ref=version_ref,
             relations=checked,
-            operation_id=created_at,
+            operation_id=asserted_at["operation_id"] if asserted_at else created_at,
+            asserted_at=asserted_at,
             created_at=created_at,
             next_id=self._next,
         )
@@ -483,9 +473,41 @@ class MemoryStore:
             (todo_id, trigger_kind, trigger_ref, node_id, "pending", at, at),
         )
 
+    @staticmethod
+    def _offline_asserted_at(operation_id: str) -> dict:
+        return dict(host_id="native_store", session_id="native_store", turn=None, operation_id=operation_id)
+
+    @staticmethod
+    def _reject_asserted_at(fields: dict) -> None:
+        if "asserted_at" in fields or (isinstance(fields.get("changes"), dict) and "asserted_at" in fields["changes"]):
+            raise ValidationError("asserted_at is server-managed")
+
+    def _execution_refs(self, db: sqlite3.Connection, refs: list) -> list[dict]:
+        if not isinstance(refs, list) or not all(isinstance(ref, str) for ref in refs):
+            raise ValidationError("execution_refs must be a list of strings")
+        checked = []
+        for ref in refs:
+            prefix, _, identifier = ref.partition(":")
+            if prefix == "session":
+                exists = db.execute("SELECT 1 FROM workflow_sessions WHERE session_id=? UNION ALL SELECT 1 FROM exploration_tasks WHERE session_id=? LIMIT 1", (identifier, identifier)).fetchone()
+                reason = None if exists else "not_found"
+            elif prefix in {"attempt", "event"}:
+                table, column = ("attempts", "attempt_id") if prefix == "attempt" else ("events", "event_id")
+                reason = None if db.execute(f"SELECT 1 FROM {table} WHERE {column}=?", (identifier,)).fetchone() else "not_found"
+            elif frozen_refs.is_frozen(ref):
+                resolution = frozen_refs.resolve(db, self.root, ref)
+                reason = resolution["reason"] if resolution["outcome"] != "resolved" else (None if resolution["object"] else "not_an_object")
+            else:
+                reason = "unsupported_form"
+            checked.append(dict(ref=ref, status="linked" if reason is None else "unlinked", reason=reason))
+        return checked
+
     def record_knowledge(
-        self, fields: dict, request_id: str, *, execution_identity: tuple[str, str] | None = None
+        self, fields: dict, request_id: str, *, execution_identity: tuple[str, str] | None = None,
+        asserted_at: dict | None = None
     ) -> dict:
+        self._reject_asserted_at(fields)
+        asserted_at = asserted_at or self._offline_asserted_at(request_id)
         kind = fields.get("kind")
         if kind not in KINDS:
             raise ValidationError("Invalid knowledge kind")
@@ -527,6 +549,8 @@ class MemoryStore:
             "node_id": fields.get("node_id"),
             "source_sequence": fields.get("source_sequence"),
         }
+        if "execution_refs" in fields:
+            payload["execution_refs"] = fields["execution_refs"]
         if execution_identity is not None:
             visibility = fields.get("visibility", "node")
             if visibility not in {"node", "project"}:
@@ -551,11 +575,11 @@ class MemoryStore:
                         "No current node; specify node_id or visibility='project'"
                     )
                 effective["node_id"] = attempt["node_id"]
-            return self._record_knowledge_in_tx(db, effective)
+            return self._record_knowledge_in_tx(db, effective, asserted_at=asserted_at)
 
         return self._mutate("knowledge.record", payload, request_id, work)
 
-    def _record_knowledge_in_tx(self, db: sqlite3.Connection, payload: dict) -> dict:
+    def _record_knowledge_in_tx(self, db: sqlite3.Connection, payload: dict, *, asserted_at: dict | None = None) -> dict:
         node_id = payload.get("node_id")
         if node_id and not db.execute("SELECT 1 FROM nodes WHERE node_id=?", (node_id,)).fetchone():
             raise NotFoundError(f"Unknown node: {node_id}")
@@ -592,19 +616,23 @@ class MemoryStore:
                     db.execute("SELECT COALESCE(MAX(event_id),0)+1 FROM events").fetchone()[0]
                 ),
                 _encoded(payload.get("motivated_by", [])),
+                _encoded(asserted_at),
+                _encoded(self._execution_refs(db, payload.get("execution_refs", []))),
             ),
         )
         value = self._decode_knowledge(self._latest_revision(db, kid))
         self._index_knowledge(db, value)
         self.sync_support_edges(db, value)
-        self._write_relations_in_tx(db, value["ref"], payload.get("relations", []), at)
+        self._write_relations_in_tx(db, value["ref"], payload.get("relations", []), at, asserted_at)
         _epistemic().late_reference_impacts(
             db, value["ref"], value["created_at"], int(value.get("source_sequence") or 0)
         )
         self._event(db, "knowledge.recorded", {"ref": value["ref"], "node_id": node_id})
         return value
 
-    def revise_knowledge(self, fields: dict, request_id: str) -> dict:
+    def revise_knowledge(self, fields: dict, request_id: str, *, asserted_at: dict | None = None) -> dict:
+        self._reject_asserted_at(fields)
+        asserted_at = asserted_at or self._offline_asserted_at(request_id)
         ref = _require_text(fields.get("ref"), "ref")
         kid, referenced_revision = parse_knowledge_ref(ref)
         expected = int(fields.get("expected_revision", referenced_revision))
@@ -619,6 +647,9 @@ class MemoryStore:
             "affected_scope": _json_value(fields.get("affected_scope"), "affected_scope", []),
             "change_kind": fields.get("change_kind"),
         }
+
+        if "execution_refs" in fields:
+            payload["execution_refs"] = fields["execution_refs"]
 
         def work(db: sqlite3.Connection) -> dict:
             current = self._decode_knowledge(self._latest_revision(db, kid))
@@ -678,12 +709,15 @@ class MemoryStore:
                     at,
                     int(db.execute("SELECT COALESCE(MAX(event_id),0)+1 FROM events").fetchone()[0]),
                     _encoded(value["motivated_by"]),
+                    _encoded(asserted_at),
+                    # R37: attribution belongs to this write; never inherit it from current.
+                    _encoded(self._execution_refs(db, payload.get("execution_refs", []))),
                 ),
             )
             fresh = self._decode_knowledge(self._latest_revision(db, kid))
             self._index_knowledge(db, fresh)
             self.sync_support_edges(db, fresh)
-            self._write_relations_in_tx(db, fresh["ref"], payload["relations"], at)
+            self._write_relations_in_tx(db, fresh["ref"], payload["relations"], at, asserted_at)
             mode, resolved_scope, change_kind = _epistemic().validate_change(
                 mode=payload["affected_scope_mode"],
                 scope=payload["affected_scope"],
@@ -1152,6 +1186,8 @@ class MemoryStore:
             # eight are disposed of, everything behind them disappears from the
             # default view (R18 supplement, CE-12v).
             bound = epistemic.read_bound(db)
+            from .hints import structure_hints
+            hints = structure_hints(db, bound)
             anchors = epistemic.anchor_set(db)
             def still_open(row: sqlite3.Row) -> bool:
                 disposition = epistemic.current_disposition(
@@ -1247,8 +1283,8 @@ class MemoryStore:
             for ref in inputs:
                 if ref.startswith("knowledge/"):
                     pinned.append(ref)
-                elif ref.startswith("pub/"):
-                    pid = ref[4:].split("#", 1)[0]
+                elif frozen_refs.parse(ref).get("publication_id"):
+                    pid = frozen_refs.parse(ref)["publication_id"]
                     pub = db.execute(
                         "SELECT node_id FROM publications WHERE publication_id=?", (pid,)
                     ).fetchone()
@@ -1425,6 +1461,7 @@ class MemoryStore:
                 # so the total and its bounded sample survive context pressure.
                 ("pending_review", review_todos),
                 ("affected_knowledge", affected_knowledge),
+                ("structure_hints", hints),
                 ("retracted_refs", retracted_refs),
                 ("knowledge", knowledge),
                 ("questions", questions),
@@ -1460,6 +1497,7 @@ class MemoryStore:
                     or (name == "pending_review" and not value["pending_total"])
                     or (name == "affected_knowledge" and not value["total"])
                     or (name == "retracted_refs" and not value["total"])
+                    or (name == "structure_hints" and not value["total"])
                 ):
                     continue
                 allowance = min(
@@ -1477,6 +1515,7 @@ class MemoryStore:
                         # invalidated basis is what the coordinator must not
                         # lose to context pressure.
                         "affected_knowledge": 2400,
+                        "structure_hints": 2400,
                         "retracted_refs": 800,
                         "knowledge": 4000,
                         "questions": 1600 if coordinator else 800,

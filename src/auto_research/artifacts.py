@@ -303,6 +303,15 @@ class ArtifactStore:
     ) -> Path:
         """Copy a verified product without changing its archive or overwriting files."""
         source = self.verify(product)
+        subpath = product.get("subpath")
+        if subpath:
+            # The parser has already resolved this path. Check again here because
+            # materialize is also a public API, then snapshot only this subtree.
+            if not isinstance(subpath, str) or Path(subpath).is_absolute() or any(
+                part in ("", "..") for part in subpath.split("/")
+            ):
+                raise ArtifactError("Invalid frozen object subpath")
+            source = source / subpath
         try:
             _, relative = _source_relative(destination, self.root)
         except OSError as exc:
@@ -321,7 +330,7 @@ class ArtifactStore:
         temporary = destination.parent / f".materialize-{uuid.uuid4().hex}"
         try:
             kind, version = _snapshot(source, self.root, temporary)
-            if version != product["version"] or kind != product["kind"]:
+            if not subpath and (version != product["version"] or kind != product["kind"]):
                 raise ArtifactError("Archived artifact changed during materialization")
             if readonly:
                 _readonly(temporary)

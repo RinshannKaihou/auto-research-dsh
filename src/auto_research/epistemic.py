@@ -1126,6 +1126,7 @@ def write_declared_relations(
     operation_id: str,
     created_at: str,
     next_id,
+    asserted_at: dict | None = None,
 ) -> list[dict]:
     """Store the declaration-only relations beside the revision.
 
@@ -1153,9 +1154,9 @@ def write_declared_relations(
         db.execute(
             "INSERT INTO relations"
             " (relation_id,source_ref,target_ref,label,note,created_at,relation_type,"
-            "  scheduling,operation_id)"
-            " VALUES (?,?,?,?,'',?,'knowledge',0,?)",
-            (relation_id, version_ref, item["target"], item["type"], created_at, operation_id),
+            "  scheduling,operation_id,asserted_at)"
+            " VALUES (?,?,?,?,'',?,'knowledge',0,?,?)",
+            (relation_id, version_ref, item["target"], item["type"], created_at, operation_id, json.dumps(asserted_at, ensure_ascii=False, sort_keys=True, allow_nan=False)),
         )
         written.append({"relation_id": relation_id, **item})
     return written
