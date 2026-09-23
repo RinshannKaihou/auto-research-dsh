@@ -122,6 +122,11 @@ export function createWorkbench(React, rpc, openSession, projectGraph, ResearchG
           ...knowledgeRows.map(item=>h('article',{key:item.ref},h('strong',null,`${item.ref} · ${item.kind} · ${item.status}`),
             h('p',{className:'ari-preserve'},typeof item.statement==='string'?item.statement:item.statement?.preview),
             h('p',null,h('strong',null,'证据引用：'),item.evidence_refs?.length?item.evidence_refs.map(ref=>h('button',{key:ref,onClick:()=>inspectReference(ref)},ref)):'未关联证据'),
+            ...(item.field_checks??[]).map((check,index)=>h('p',{key:`field-check-${index}`},
+              h('strong',null,'字段检查：'),JSON.stringify(check.spec),' · ',
+              check.result==='consistent'?'声明字段与冻结文件一致':
+                check.result==='inconsistent'?`声明字段与冻结文件不一致 · 实际读值：${check.observed_text}`:
+                  `无法检查：${check.reason}`)),
             h('p',null,h('strong',null,'记账来源：'),item.asserted_at?JSON.stringify(item.asserted_at):'历史记录，无来源'),
             ...(item.execution_refs??[]).map((ref,index)=>h('p',{key:`execution-${index}`},`执行来源：${ref.ref} · ${ref.status==='linked'?'已关联':`未关联 · ${ref.reason}`}`)),
             h('p',null,h('strong',null,'自述来源：'),item.source_identity&&Object.keys(item.source_identity).length?JSON.stringify(item.source_identity):'未填写',item.source_identity?.session_id&&h('button',{onClick:()=>navigate(item.source_identity.session_id)},'打开来源会话')),

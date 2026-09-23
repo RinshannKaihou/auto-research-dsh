@@ -6,7 +6,7 @@ read-only projections and can always be rebuilt from these tables.
 
 from __future__ import annotations
 
-from . import frozen_refs
+from . import frozen_refs, field_checks
 
 from datetime import datetime, timezone
 import hashlib
@@ -162,10 +162,10 @@ _LEGACY_REVISION_COLUMNS = (
     "knowledge_id,revision,statement,scope,conditions,status,evidence_refs,"
     "source_identity,dependencies,supersedes,author,created_at,source_sequence"
 )
-_REVISION_COLUMNS = _LEGACY_REVISION_COLUMNS + ",motivated_by,asserted_at,execution_refs"
+_REVISION_COLUMNS = _LEGACY_REVISION_COLUMNS + ",motivated_by,asserted_at,execution_refs,checks"
 _REVISION_INSERT = (
     f"INSERT INTO knowledge_revisions ({_REVISION_COLUMNS})"
-    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
 )
 _REVISION_INSERT_IGNORE = (
     f"INSERT OR IGNORE INTO knowledge_revisions ({_LEGACY_REVISION_COLUMNS})"
@@ -360,7 +360,7 @@ class MemoryStore:
         return row
 
     @staticmethod
-    def _decode_knowledge(row: sqlite3.Row) -> dict:
+    def _decode_knowledge(row: sqlite3.Row, db=None) -> dict:
         value = dict(row)
         for key in (
             "scope",
@@ -375,7 +375,10 @@ class MemoryStore:
         value["motivated_by"] = json.loads(value.get("motivated_by") or "[]")
         value["asserted_at"] = json.loads(value.get("asserted_at") or "null")
         value["execution_refs"] = json.loads(value.get("execution_refs") or "[]")
+        value["checks"] = json.loads(value.get("checks") or "[]")
         value["ref"] = _knowledge_ref(value["knowledge_id"], value["revision"])
+        if db is not None:
+            value["field_checks"] = field_checks.read(db, value["ref"])
         return value
 
     def _validate_evidence(self, db: sqlite3.Connection, refs: list[str]) -> None:
@@ -549,6 +552,9 @@ class MemoryStore:
             "node_id": fields.get("node_id"),
             "source_sequence": fields.get("source_sequence"),
         }
+        if "checks" in fields:
+            with self._read() as db:
+                payload["checks"] = field_checks.declare(db, self.root, kind, fields["checks"])
         if "execution_refs" in fields:
             payload["execution_refs"] = fields["execution_refs"]
         if execution_identity is not None:
@@ -590,6 +596,7 @@ class MemoryStore:
         # Heuristic links must resolve too, but they never become support
         # edges: a motivation does not propagate invalidation (R4).
         self._validate_evidence(db, payload.get("motivated_by", []))
+        checks = field_checks.declare(db, self.root, payload["kind"], payload.get("checks", []))
         kid = self._next(db, "knowledge", "K")
         at = _now()
         db.execute(
@@ -618,9 +625,12 @@ class MemoryStore:
                 _encoded(payload.get("motivated_by", [])),
                 _encoded(asserted_at),
                 _encoded(self._execution_refs(db, payload.get("execution_refs", []))),
+                _encoded(checks),
             ),
         )
         value = self._decode_knowledge(self._latest_revision(db, kid))
+        field_checks.evaluate(db, self.root, value["ref"], checks,
+                              sequence=value["source_sequence"], created_at=at)
         self._index_knowledge(db, value)
         self.sync_support_edges(db, value)
         self._write_relations_in_tx(db, value["ref"], payload.get("relations", []), at, asserted_at)
@@ -636,10 +646,17 @@ class MemoryStore:
         ref = _require_text(fields.get("ref"), "ref")
         kid, referenced_revision = parse_knowledge_ref(ref)
         expected = int(fields.get("expected_revision", referenced_revision))
+        changes = fields.get("changes")
+        if isinstance(changes, dict) and "checks" in changes:
+            with self._read() as db:
+                current = self._decode_knowledge(self._latest_revision(db, kid))
+                checks = field_checks.declare(db, self.root, current["kind"], changes["checks"],
+                                              current=current["checks"])
+            changes = {**changes, "checks": checks}
         payload = {
             "ref": ref,
             "expected_revision": expected,
-            "changes": _json_value(fields.get("changes"), "changes", {}),
+            "changes": _json_value(changes, "changes", {}),
             "reason": _require_text(fields.get("reason"), "reason"),
             "source_identity": _json_value(fields.get("source_identity"), "source_identity", {}),
             "relations": _epistemic().normalise_relations(fields.get("relations")),
@@ -666,6 +683,7 @@ class MemoryStore:
                 "evidence_refs",
                 "dependencies",
                 "motivated_by",
+                "checks",
                 "author",
             }
             if not isinstance(changes, dict) or set(changes) - allowed:
@@ -688,7 +706,9 @@ class MemoryStore:
                     isinstance(x, str) for x in value[key]
                 ):
                     raise ValidationError(f"{key} must be strings")
-                self._validate_evidence(db, value[key])
+                self._validate_evidence(db, [ref for ref in value[key] if ref not in current[key]])
+            value["checks"] = field_checks.declare(db, self.root, value["kind"], value["checks"],
+                                                  current=current["checks"])
             revision = current["revision"] + 1
             at = _now()
             supersedes = [current["ref"]]
@@ -712,9 +732,12 @@ class MemoryStore:
                     _encoded(asserted_at),
                     # R37: attribution belongs to this write; never inherit it from current.
                     _encoded(self._execution_refs(db, payload.get("execution_refs", []))),
+                    _encoded(value["checks"]),
                 ),
             )
             fresh = self._decode_knowledge(self._latest_revision(db, kid))
+            field_checks.evaluate(db, self.root, fresh["ref"], fresh["checks"],
+                                  sequence=fresh["source_sequence"], created_at=at)
             self._index_knowledge(db, fresh)
             self.sync_support_edges(db, fresh)
             self._write_relations_in_tx(db, fresh["ref"], payload["relations"], at, asserted_at)
@@ -1104,7 +1127,7 @@ class MemoryStore:
                 if enabled is not None and enabled != {}
             ]
             items = [
-                {**self._decode_knowledge(row), "match_reason": reasons or ["latest"]}
+                {**self._decode_knowledge(row, db), "match_reason": reasons or ["latest"]}
                 for row in rows[:limit]
             ]
             return {
@@ -1421,6 +1444,11 @@ class MemoryStore:
                     }
                     if isinstance(frozen_context.get("goal"), str):
                         frozen_context["goal"] = frozen_context["goal"][:1000]
+            def without_checks(items):
+                return [{k: v for k, v in item.items() if k not in {"checks", "field_checks"}}
+                        for item in items]
+            knowledge = ({key: without_checks(items) for key, items in knowledge.items()}
+                         if isinstance(knowledge, dict) else without_checks(knowledge))
             blocks = [
                 ("project", {"goal": project["goal"], "control": project["control"]}),
                 ("role_instructions", {

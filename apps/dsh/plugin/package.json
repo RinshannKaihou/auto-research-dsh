@@ -1,6 +1,6 @@
 {
   "name": "auto-research-v5",
-  "version": "0.6.8",
+  "version": "0.6.9",
   "description": "Native DSH research workflow plugin",
   "type": "module",
   "main": "index.js",

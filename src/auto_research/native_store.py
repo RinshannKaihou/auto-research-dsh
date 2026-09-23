@@ -23,10 +23,11 @@ from .schema5 import SCHEMA5_DDL, ensure_schema5_columns, migrate_schema5
 from .schema6 import migrate_schema6
 from .schema7 import SCHEMA7_DDL, ensure_schema7_columns, migrate_schema7
 from .schema8 import ensure_schema8_columns, migrate_schema8
+from .schema9 import ensure_schema9, migrate_schema9
 from . import epistemic, frozen_refs
 
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 ATTEMPT_STATES = frozenset({"open", "finished", "stopped", "unknown"})
 NODE_STATES = frozenset({"proposed", "open", "closed"})
 
@@ -99,6 +100,9 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
             if version == 7 and SCHEMA_VERSION >= 8:
                 migrate_schema8(self.db_path)
                 version = 8
+            if version == 8 and SCHEMA_VERSION >= 9:
+                migrate_schema9(self.db_path)
+                version = 9
             if version not in {0, SCHEMA_VERSION}:
                 raise ValidationError(
                     f"Schema {version} must be migrated before native plugin writes"
@@ -232,7 +236,7 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
             CREATE TABLE IF NOT EXISTS counters (
                 name TEXT PRIMARY KEY, value INTEGER NOT NULL
             );
-            PRAGMA user_version=8;
+            PRAGMA user_version=9;
             """
         )
         db.executescript(DDL)
@@ -260,10 +264,11 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
                 db.execute(statement)
         ensure_schema7_columns(db)
         ensure_schema8_columns(db)
+        ensure_schema9(db)
         for statement in SCHEMA7_DDL.split(";"):
             if statement.strip():
                 db.execute(statement)
-        db.execute("PRAGMA user_version=8")
+        db.execute("PRAGMA user_version=9")
 
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
@@ -1702,7 +1707,7 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
             }
             result["workflow"] = self.workflow_view(db, session_id)
             result["knowledge"] = [
-                self._decode_knowledge(row)
+                self._decode_knowledge(row, db)
                 for row in db.execute(
                     "SELECT e.kind,e.node_id,r.* FROM knowledge_entries e "
                     "JOIN knowledge_revisions r USING(knowledge_id) "

@@ -12,6 +12,7 @@ for (const file of [
   'artifacts.py',
   'epistemic.py',
   'frozen_refs.py',
+  'field_checks.py',
   'hints.py',
   'errors.py',
   'migration.py',
@@ -23,6 +24,7 @@ for (const file of [
   'schema6.py',
   'schema7.py',
   'schema8.py',
+  'schema9.py',
   'workflow_store.py',
   'service.py',
 ]) {

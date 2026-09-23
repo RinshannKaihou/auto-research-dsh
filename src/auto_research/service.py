@@ -623,7 +623,7 @@ class NativeService:
         method = request.get("method")
         if method == "capabilities":
             value = {
-                "schema_version": 8,
+                "schema_version": 9,
                 "execution_owner": "dsh",
                 "model_loop": "native-goals",
                 "manual_research": True,

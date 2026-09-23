@@ -13,7 +13,7 @@ from typing import Any
 
 from . import frozen_refs
 from .errors import NotFoundError, ValidationError
-from .memory_store import parse_knowledge_ref
+from .memory_store import MemoryStore, parse_knowledge_ref
 
 
 COLLECTIONS = {
@@ -55,9 +55,9 @@ class QueryStore:
     ) -> dict:
         value = dict(row)
         cursor = value.pop("_cursor")
-        if "asserted_at" in value:
+        if collection != "knowledge" and "asserted_at" in value:
             value["asserted_at"] = json.loads(value["asserted_at"])
-        if "execution_refs" in value:
+        if collection != "knowledge" and "execution_refs" in value:
             value["execution_refs"] = json.loads(value["execution_refs"])
         if collection == "impacts":
             # The row alone cannot be read: an affected version means nothing
@@ -137,16 +137,7 @@ class QueryStore:
                 (value["knowledge_id"],),
             ).fetchone()
             value.update(dict(entry))
-            for key in (
-                "scope",
-                "conditions",
-                "evidence_refs",
-                "source_identity",
-                "dependencies",
-                "supersedes",
-            ):
-                value[key] = json.loads(value[key])
-            value["ref"] = f"knowledge/{value['knowledge_id']}@{value['revision']}"
+            value = MemoryStore._decode_knowledge(value, db)
         elif collection == "checkpoints":
             value["state"] = json.loads(value["state"])
             value["source_identity"] = json.loads(value["source_identity"])
@@ -379,7 +370,7 @@ class QueryStore:
                     (kid, revision),
                 ).fetchone()
                 if row:
-                    return {"kind": "knowledge", "value": self._decode_knowledge(row)}
+                    return {"kind": "knowledge", "value": self._decode_knowledge(row, db)}
             node = db.execute(
                 "SELECT rowid AS _cursor,* FROM nodes WHERE node_id=?", (ref,)
             ).fetchone()
@@ -502,7 +493,7 @@ class QueryStore:
                 )
             ]
             return {
-                "schema_version": 8,
+                "schema_version": 9,
                 "project": project,
                 "association": dict(association) if association else None,
                 "attempt": {**dict(attempt), "details": json.loads(attempt["details"])}
