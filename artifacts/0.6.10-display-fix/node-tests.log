@@ -1,0 +1,592 @@
+TAP version 13
+# Subtest: versions, anchors, legacy refs, cycles and planning retain exact attribution
+ok 1 - versions, anchors, legacy refs, cycles and planning retain exact attribution
+  ---
+  duration_ms: 17.587083
+  type: 'test'
+  ...
+# Subtest: direct ownership wins, dangling ownership never falls back to an unrelated node
+ok 2 - direct ownership wins, dangling ownership never falls back to an unrelated node
+  ---
+  duration_ms: 1.52975
+  type: 'test'
+  ...
+# Subtest: missing endpoints and self references remain readable without invented edges
+ok 3 - missing endpoints and self references remain readable without invented edges
+  ---
+  duration_ms: 3.035958
+  type: 'test'
+  ...
+# Subtest: typed predecessors render directly and zero-edge nodes retain origin semantics
+ok 4 - typed predecessors render directly and zero-edge nodes retain origin semantics
+  ---
+  duration_ms: 1.319459
+  type: 'test'
+  ...
+# Subtest: lineage corrections remain distinct from original root declarations
+ok 5 - lineage corrections remain distinct from original root declarations
+  ---
+  duration_ms: 0.179166
+  type: 'test'
+  ...
+# Subtest: SCC layout is stable, non-overlapping, and preserves disconnected nodes
+ok 6 - SCC layout is stable, non-overlapping, and preserves disconnected nodes
+  ---
+  duration_ms: 2.87725
+  type: 'test'
+  ...
+# Subtest: 200 nodes / 500 edges scale fixture, zoom bounds and viewport clipping
+ok 7 - 200 nodes / 500 edges scale fixture, zoom bounds and viewport clipping
+  ---
+  duration_ms: 11.683167
+  type: 'test'
+  ...
+# Subtest: private IPC initializes schema 9 and deduplicates business operations
+ok 8 - private IPC initializes schema 9 and deduplicates business operations
+  ---
+  duration_ms: 300.928958
+  type: 'test'
+  ...
+# Subtest: generated client exposes blank-session research command receipt
+ok 9 - generated client exposes blank-session research command receipt
+  ---
+  duration_ms: 0.625959
+  type: 'test'
+  ...
+# Subtest: session adapter uses ordinary native sessions and preserves model selection
+ok 10 - session adapter uses ordinary native sessions and preserves model selection
+  ---
+  duration_ms: 0.631541
+  type: 'test'
+  ...
+# Subtest: native session absence is distinguished from IO failure
+ok 11 - native session absence is distinguished from IO failure
+  ---
+  duration_ms: 0.261958
+  type: 'test'
+  ...
+# Subtest: local tool definitions expose JSON schema and validate required arguments
+ok 12 - local tool definitions expose JSON schema and validate required arguments
+  ---
+  duration_ms: 0.293333
+  type: 'test'
+  ...
+# Subtest: user long summary is a single normal preview, never a heading; raw stays exact
+ok 13 - user long summary is a single normal preview, never a heading; raw stays exact
+  ---
+  duration_ms: 4.992584
+  type: 'test'
+  ...
+# Subtest: Markdown renders prose-level headings, lists and tables without unsafe HTML/links
+ok 14 - Markdown renders prose-level headings, lists and tables without unsafe HTML/links
+  ---
+  duration_ms: 1.788417
+  type: 'test'
+  ...
+# Subtest: report selection uses registered attachments, never prose paths
+ok 15 - report selection uses registered attachments, never prose paths
+  ---
+  duration_ms: 0.434125
+  type: 'test'
+  ...
+# Subtest: bad optional display falls back; empty publications remain readable
+ok 16 - bad optional display falls back; empty publications remain readable
+  ---
+  duration_ms: 1.211875
+  type: 'test'
+  ...
+# Subtest: display sections render as lists and remain local to each publication
+ok 17 - display sections render as lists and remain local to each publication
+  ---
+  duration_ms: 0.283416
+  type: 'test'
+  ...
+# Subtest: research_publish keeps display optional and forwards it without another model call
+ok 18 - research_publish keeps display optional and forwards it without another model call
+  ---
+  duration_ms: 10.356041
+  type: 'test'
+  ...
+# Subtest: repeated successful status has visible sequence; commands and errors stay session-scoped
+ok 19 - repeated successful status has visible sequence; commands and errors stay session-scoped
+  ---
+  duration_ms: 9.700708
+  type: 'test'
+  ...
+# Subtest: late status response cannot resurrect association after a newer detach failure
+ok 20 - late status response cannot resurrect association after a newer detach failure
+  ---
+  duration_ms: 0.5965
+  type: 'test'
+  ...
+# Subtest: RPC failure removes stale badge and a subsequent successful refresh recovers
+ok 21 - RPC failure removes stale badge and a subsequent successful refresh recovers
+  ---
+  duration_ms: 1.302958
+  type: 'test'
+  ...
+# Subtest: blank unassociated receipt opens real workbench dialog with no prompt or tab dependency
+ok 22 - blank unassociated receipt opens real workbench dialog with no prompt or tab dependency
+  ---
+  duration_ms: 1.441334
+  type: 'test'
+  ...
+# Subtest: receipt displays successful raw result and visible error, including repeat counter
+ok 23 - receipt displays successful raw result and visible error, including repeat counter
+  ---
+  duration_ms: 0.518417
+  type: 'test'
+  ...
+# Subtest: generated client wires per-session hooks and remount keys through public dock API
+ok 24 - generated client wires per-session hooks and remount keys through public dock API
+  ---
+  duration_ms: 40.168709
+  type: 'test'
+  ...
+# Subtest: server RPC failures satisfy DSH failure envelope instead of hiding the domain error
+ok 25 - server RPC failures satisfy DSH failure envelope instead of hiding the domain error
+  ---
+  duration_ms: 2.738917
+  type: 'test'
+  ...
+# Subtest: navigation dock waits for the native conversation store to register
+ok 26 - navigation dock waits for the native conversation store to register
+  ---
+  duration_ms: 1.97175
+  type: 'test'
+  ...
+# Subtest: opening the current session switches its native view to chat
+ok 27 - opening the current session switches its native view to chat
+  ---
+  duration_ms: 1.986666
+  type: 'test'
+  ...
+# Subtest: opening another session switches its view when its dock mounts
+ok 28 - opening another session switches its view when its dock mounts
+  ---
+  duration_ms: 0.348375
+  type: 'test'
+  ...
+# Subtest: persisted children refresh the parent catalog before selection; errors propagate
+ok 29 - persisted children refresh the parent catalog before selection; errors propagate
+  ---
+  duration_ms: 1.617375
+  type: 'test'
+  ...
+# Subtest: live runtime changes invalidate equal ledger revisions
+ok 30 - live runtime changes invalidate equal ledger revisions
+  ---
+  duration_ms: 0.430167
+  type: 'test'
+  ...
+# Subtest: read-only view binding navigates without a composer and leaves other bindings intact
+ok 31 - read-only view binding navigates without a composer and leaves other bindings intact
+  ---
+  duration_ms: 0.45825
+  type: 'test'
+  ...
+# Subtest: reload context recovers a completed child from the native durable address
+ok 32 - reload context recovers a completed child from the native durable address
+  ---
+  duration_ms: 0.695208
+  type: 'test'
+  ...
+# Subtest: known children never fall back to a root route when their catalog is unavailable
+ok 33 - known children never fall back to a root route when their catalog is unavailable
+  ---
+  duration_ms: 0.373708
+  type: 'test'
+  ...
+# Subtest: overview is the first view and does not request every history collection
+ok 34 - overview is the first view and does not request every history collection
+  ---
+  duration_ms: 16.518084
+  type: 'test'
+  ...
+# Subtest: report opens readable frozen text without a model or ledger write
+ok 35 - report opens readable frozen text without a model or ledger write
+  ---
+  duration_ms: 7.254167
+  type: 'test'
+  ...
+# Subtest: knowledge view opens exact revision and its older version
+ok 36 - knowledge view opens exact revision and its older version
+  ---
+  duration_ms: 11.9165
+  type: 'test'
+  ...
+# Subtest: frozen Markdown report renders headings and comparison tables as elements
+ok 37 - frozen Markdown report renders headings and comparison tables as elements
+  ---
+  duration_ms: 0.615167
+  type: 'test'
+  ...
+# Subtest: runtime rows use live roles/status and explain task waits; navigation failures are visible
+ok 38 - runtime rows use live roles/status and explain task waits; navigation failures are visible
+  ---
+  duration_ms: 11.561667
+  type: 'test'
+  ...
+# Subtest: unattached specialist rows resolve the durable parent without a live runtime entry
+ok 39 - unattached specialist rows resolve the durable parent without a live runtime entry
+  ---
+  duration_ms: 3.096167
+  type: 'test'
+  ...
+# Subtest: completed child Research reads through its parent and disables project mutations
+ok 40 - completed child Research reads through its parent and disables project mutations
+  ---
+  duration_ms: 1.790791
+  type: 'test'
+  ...
+# Subtest: child Research retains an escape when both child and project are unavailable
+ok 41 - child Research retains an escape when both child and project are unavailable
+  ---
+  duration_ms: 3.112708
+  type: 'test'
+  ...
+# Subtest: legacy compact specialist pages expand the durable detail on demand
+ok 42 - legacy compact specialist pages expand the durable detail on demand
+  ---
+  duration_ms: 5.18225
+  type: 'test'
+  ...
+# Subtest: publication expansion reads full records rather than compact page previews and preserves raw text
+ok 43 - publication expansion reads full records rather than compact page previews and preserves raw text
+  ---
+  duration_ms: 5.982
+  type: 'test'
+  ...
+# Subtest: truncated summaries use chunk transport; old hosts show an explicit error instead of fake full text
+ok 44 - truncated summaries use chunk transport; old hosts show an explicit error instead of fake full text
+  ---
+  duration_ms: 7.734917
+  type: 'test'
+  ...
+# Subtest: unverified creation visibly reserves capacity and opens the recovery section
+ok 45 - unverified creation visibly reserves capacity and opens the recovery section
+  ---
+  duration_ms: 46.714
+  type: 'test'
+  ...
+# Subtest: selection is read-only, polling failure keeps graph, stale actions disabled, retry recovers
+ok 46 - selection is read-only, polling failure keeps graph, stale actions disabled, retry recovers
+  ---
+  duration_ms: 8.30075
+  type: 'test'
+  ...
+# Subtest: late reply from a detached component is discarded
+ok 47 - late reply from a detached component is discarded
+  ---
+  duration_ms: 2.157375
+  type: 'test'
+  ...
+# Subtest: pending action guard prevents duplicate discussion calls
+ok 48 - pending action guard prevents duplicate discussion calls
+  ---
+  duration_ms: 3.976167
+  type: 'test'
+  ...
+# Subtest: approval and knowledge provenance are shown as separate actionable fields
+ok 49 - approval and knowledge provenance are shown as separate actionable fields
+  ---
+  duration_ms: 4.177458
+  type: 'test'
+  ...
+# Subtest: CE-17 UI pub/P-001\#report
+ok 50 - CE-17 UI pub/P-001\#report
+  ---
+  duration_ms: 3.226167
+  type: 'test'
+  ...
+# Subtest: CE-17 UI S-002\#REPORT.md
+ok 51 - CE-17 UI S-002\#REPORT.md
+  ---
+  duration_ms: 4.440583
+  type: 'test'
+  ...
+# Subtest: CE-17 UI S-001\#missing.txt
+ok 52 - CE-17 UI S-001\#missing.txt
+  ---
+  duration_ms: 2.252541
+  type: 'test'
+  ...
+# Subtest: CE-17 UI S-001\#out/../x
+ok 53 - CE-17 UI S-001\#out/../x
+  ---
+  duration_ms: 4.521541
+  type: 'test'
+  ...
+# Subtest: CE-17 UI S-001\#out/sub/b.txt
+ok 54 - CE-17 UI S-001\#out/sub/b.txt
+  ---
+  duration_ms: 2.970375
+  type: 'test'
+  ...
+# Subtest: CE-17 UI pub/P-001\#note
+ok 55 - CE-17 UI pub/P-001\#note
+  ---
+  duration_ms: 3.737417
+  type: 'test'
+  ...
+# Subtest: CE-19 provenance display
+ok 56 - CE-19 provenance display
+  ---
+  duration_ms: 5.281792
+  type: 'test'
+  ...
+# Subtest: CE-20 provenance display
+ok 57 - CE-20 provenance display
+  ---
+  duration_ms: 4.823625
+  type: 'test'
+  ...
+# Subtest: CE-23 provenance display
+ok 58 - CE-23 provenance display
+  ---
+  duration_ms: 4.587791
+  type: 'test'
+  ...
+# Subtest: CE-21 candidate hints display repair evidence and page before rendering
+ok 59 - CE-21 candidate hints display repair evidence and page before rendering
+  ---
+  duration_ms: 4.209958
+  type: 'test'
+  ...
+# Subtest: CE-27 field consistency wording and declared values
+ok 60 - CE-27 field consistency wording and declared values
+  ---
+  duration_ms: 4.323959
+  type: 'test'
+  ...
+# Subtest: CE-27 research_memory declares checks and their limits
+ok 61 - CE-27 research_memory declares checks and their limits
+  ---
+  duration_ms: 3.682542
+  type: 'test'
+  ...
+# Subtest: 0.6.3 managed executors cannot bypass durable specialist delegation
+ok 62 - 0.6.3 managed executors cannot bypass durable specialist delegation
+  ---
+  duration_ms: 1.20975
+  type: 'test'
+  ...
+# Subtest: 0.6.3 a node keeps one native core session and cwd across work segments
+ok 63 - 0.6.3 a node keeps one native core session and cwd across work segments
+  ---
+  duration_ms: 571.318833
+  type: 'test'
+  ...
+# Subtest: 0.6.3 finish is a verified close intent and never pauses the main coordinator
+ok 64 - 0.6.3 finish is a verified close intent and never pauses the main coordinator
+  ---
+  duration_ms: 551.331375
+  type: 'test'
+  ...
+# Subtest: 0.6.3 nested goal facts and usage registration gaps stay observable
+ok 65 - 0.6.3 nested goal facts and usage registration gaps stay observable
+  ---
+  duration_ms: 134.601833
+  type: 'test'
+  ...
+# Subtest: 0.6.1 creation failure can be explicitly retried with stable identity, never on an IO error
+ok 66 - 0.6.1 creation failure can be explicitly retried with stable identity, never on an IO error
+  ---
+  duration_ms: 493.568292
+  type: 'test'
+  ...
+# Subtest: 0.6.6 material preparation failure is failed before native creation and releases capacity
+ok 67 - 0.6.6 material preparation failure is failed before native creation and releases capacity
+  ---
+  duration_ms: 236.950834
+  type: 'test'
+  ...
+# Subtest: 0.6.6 verify-task settles absent legacy creation without restarting a complete project
+ok 68 - 0.6.6 verify-task settles absent legacy creation without restarting a complete project
+  ---
+  duration_ms: 360.317625
+  type: 'test'
+  ...
+# Subtest: 0.6.6 approval status is durable, visible, and does not wake the coordinator
+ok 69 - 0.6.6 approval status is durable, visible, and does not wake the coordinator
+  ---
+  duration_ms: 342.401625
+  type: 'test'
+  ...
+# Subtest: 0.6.1 stop retains failed creation until native absence is explicitly verified
+ok 70 - 0.6.1 stop retains failed creation until native absence is explicitly verified
+  ---
+  duration_ms: 559.887875
+  type: 'test'
+  ...
+# Subtest: 0.6.1 retry reserves the failed node and binds the new attempt without double execution
+ok 71 - 0.6.1 retry reserves the failed node and binds the new attempt without double execution
+  ---
+  duration_ms: 753.131709
+  type: 'test'
+  ...
+# Subtest: 0.6.1 unverified specialists retain slots until native tools and jobs are verified
+ok 72 - 0.6.1 unverified specialists retain slots until native tools and jobs are verified
+  ---
+  duration_ms: 331.998917
+  type: 'test'
+  ...
+# Subtest: repeated start and discussion do not duplicate attempts or sessions; discussions are read-only with separate usage
+ok 73 - repeated start and discussion do not duplicate attempts or sessions; discussions are read-only with separate usage
+  ---
+  duration_ms: 501.493041
+  type: 'test'
+  ...
+# Subtest: user goals remain untouched; pauses retain their source
+ok 74 - user goals remain untouched; pauses retain their source
+  ---
+  duration_ms: 309.316667
+  type: 'test'
+  ...
+# Subtest: two queued exploration tasks overlap after the main agent waits; publication notifications are deduplicated
+ok 75 - two queued exploration tasks overlap after the main agent waits; publication notifications are deduplicated
+  ---
+  duration_ms: 657.420958
+  type: 'test'
+  ...
+# Subtest: stop waits for turns and owned jobs; never cancels unowned jobs or discussion
+ok 76 - stop waits for turns and owned jobs; never cancels unowned jobs or discussion
+  ---
+  duration_ms: 290.946208
+  type: 'test'
+  ...
+# Subtest: preview is read-only and handoff retains closed-node provenance without an attempt
+ok 77 - preview is read-only and handoff retains closed-node provenance without an attempt
+  ---
+  duration_ms: 235.729167
+  type: 'test'
+  ...
+# Subtest: stream chunk storm does not exhaust IPC; provider failures still propagate
+ok 78 - stream chunk storm does not exhaust IPC; provider failures still propagate
+  ---
+  duration_ms: 476.286333
+  type: 'test'
+  ...
+# Subtest: late notices never rearm human, native Stop, fault, completed, project-paused or cold sessions
+ok 79 - late notices never rearm human, native Stop, fault, completed, project-paused or cold sessions
+  ---
+  duration_ms: 2744.568792
+  type: 'test'
+  ...
+# Subtest: cancel failure remains unverified until verify-stop confirms exit
+ok 80 - cancel failure remains unverified until verify-stop confirms exit
+  ---
+  duration_ms: 429.748667
+  type: 'test'
+  ...
+# Subtest: explicit session resume and fault retry preserve cwd and create segments only when required
+ok 81 - explicit session resume and fault retry preserve cwd and create segments only when required
+  ---
+  duration_ms: 321.268708
+  type: 'test'
+  ...
+# Subtest: project pause allows current-turn tools to finish but refuses a new autonomous turn
+ok 82 - project pause allows current-turn tools to finish but refuses a new autonomous turn
+  ---
+  duration_ms: 314.509583
+  type: 'test'
+  ...
+# Subtest: explicit manual-to-auto transition closes manual work once, then repeat starts reuse auto work
+ok 83 - explicit manual-to-auto transition closes manual work once, then repeat starts reuse auto work
+  ---
+  duration_ms: 230.266708
+  type: 'test'
+  ...
+# Subtest: native specialists are registered before use, remain read-only, and retries do not spawn twice
+ok 84 - native specialists are registered before use, remain read-only, and retries do not spawn twice
+  ---
+  duration_ms: 437.362667
+  type: 'test'
+  ...
+# Subtest: specialist cancellation is structured and a failed dispose remains unverified without duplicate spawn
+ok 85 - specialist cancellation is structured and a failed dispose remains unverified without duplicate spawn
+  ---
+  duration_ms: 349.86975
+  type: 'test'
+  ...
+# Subtest: specialist model failure is an incomplete result and does not fault the parent goal
+ok 86 - specialist model failure is an incomplete result and does not fault the parent goal
+  ---
+  duration_ms: 308.522709
+  type: 'test'
+  ...
+# Subtest: assemble injects the first stable context and usage-only changes do not change its bytes
+ok 87 - assemble injects the first stable context and usage-only changes do not change its bytes
+  ---
+  duration_ms: 146.12725
+  type: 'test'
+  ...
+# Subtest: 0.6.5 oversized specialist output is archived without reasoning and settles
+ok 88 - 0.6.5 oversized specialist output is archived without reasoning and settles
+  ---
+  duration_ms: 183.960125
+  type: 'test'
+  ...
+# Subtest: 0.6.5 a batch overlaps execution with distinct first-context and usage identities
+ok 89 - 0.6.5 a batch overlaps execution with distinct first-context and usage identities
+  ---
+  duration_ms: 368.022083
+  type: 'test'
+  ...
+# Subtest: 0.6.5 full-batch capacity is checked before any new native startup
+ok 90 - 0.6.5 full-batch capacity is checked before any new native startup
+  ---
+  duration_ms: 290.723042
+  type: 'test'
+  ...
+# Subtest: 0.6.5 timeout and user Stop settle each member without losing partial output
+ok 91 - 0.6.5 timeout and user Stop settle each member without losing partial output
+  ---
+  duration_ms: 746.573417
+  type: 'test'
+  ...
+# Subtest: 0.6.5 archival failure retains verified exit and recovery never replays oversized legacy output
+ok 92 - 0.6.5 archival failure retains verified exit and recovery never replays oversized legacy output
+  ---
+  duration_ms: 329.169958
+  type: 'test'
+  ...
+# Subtest: 0.6.5 ordinary experts cannot reopen shell access and main cannot impersonate a node
+ok 93 - 0.6.5 ordinary experts cannot reopen shell access and main cannot impersonate a node
+  ---
+  duration_ms: 254.572917
+  type: 'test'
+  ...
+# Subtest: 0.6.5 lost finish persistence reports recovery and verifies stale running or unverified terminal records
+ok 94 - 0.6.5 lost finish persistence reports recovery and verifies stale running or unverified terminal records
+  ---
+  duration_ms: 304.870084
+  type: 'test'
+  ...
+# Subtest: 0.6.5 blind tool parameters never forward source references and assembled tools exclude host subagent
+ok 95 - 0.6.5 blind tool parameters never forward source references and assembled tools exclude host subagent
+  ---
+  duration_ms: 114.340208
+  type: 'test'
+  ...
+# Subtest: 0.6.5 simultaneous retries do not create two native runs for one operation
+ok 96 - 0.6.5 simultaneous retries do not create two native runs for one operation
+  ---
+  duration_ms: 292.263416
+  type: 'test'
+  ...
+# Subtest: 0.6.7 consolidate prepares a proposal without resolving or re-offering it
+ok 97 - 0.6.7 consolidate prepares a proposal without resolving or re-offering it
+  ---
+  duration_ms: 219.784416
+  type: 'test'
+  ...
+1..97
+# tests 97
+# suites 0
+# pass 97
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 15348.372708

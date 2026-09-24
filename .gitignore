@@ -12,3 +12,4 @@ workspaces/
 /migration-baselines/
 /apps/dsh/plugin/python/
 /apps/dsh/plugin/*.tgz
+/artifacts/*.tgz

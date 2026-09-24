@@ -1,0 +1,196 @@
+--- a/README.md
++++ b/README.md
+@@ -172,3 +172,9 @@
+ “运行与维护”的项目会话按持久化父会话收纳专家，节点默认折叠；展开节点后显示专家任务编号、任务标题和状态。节点收起时仍显示已加载的专家数量、运行及待处理计数。多个执行会话属于同一节点时，优先依据实际父会话区分；缺少父地址时只在节点核心唯一的情况下使用该节点作为展示上下文，不伪造导航地址。无法确定归属的记录放入单独折叠组。“节点内部协作”的任务清单也默认折叠。
+ 
+ 新服务的会话分页直接附带有界专家标题与归属信息；已运行的旧服务在展开节点时按需读取任务标题并缓存，无需调用模型或改写账本。会话总数超过当前页时继续使用“加载更多”，分组数量和专家计数仅统计已加载记录。
++
++### 节点讨论与会话身份
++
++“研究过程”的节点提供“讨论进展”，节点详情提供“围绕此节点讨论”。默认续用该节点已有的独立讨论；“更多 → 新建另一场讨论”显式创建新讨论。讨论使用自己的工作目录并登记到原生会话列表，默认名称包含节点与会话短编号，保留用户自定义名称。
++
++页头和输入区显示当前节点及角色，区分研究主会话、节点执行、讨论和专家；讨论可返回主会话，专家可返回父会话。对话仍使用原生 Chat 界面，身份随实际会话切换。讨论背景固定于创建时，复用不会自动刷新全部背景，可显式查询新记录。打开讨论不会自动发送消息或启动模型，也不会向研究主会话注入指令。
+--- a/client.js
++++ b/client.js
+@@ -2,7 +2,7 @@
+ window.__ModuleLoader__.load({id:'auto-research-v5',factory:require=>{
+ const React=require('react');
+ /** Native session selection and Chat navigation, including same-session opens. */
+-function createResearchSessionNavigation(sessions) {
++function createResearchSessionNavigation(sessions,workspaces,rpc) {
+   const bindings=new Map(),projects=new Map(),identities=new Map();let pending=null;
+   function arrive(id) {
+     const binding=[...(bindings.get(id)??[])].at(-1);
+@@ -23,6 +23,30 @@
+       if(typeof actions?.setView!=='function')throw new Error('原生对话导航不可用');
+       const active=bindings.get(id)??new Set();active.add(actions);bindings.set(id,active);arrive(id);
+       return()=>{active.delete(actions);if(!active.size)bindings.delete(id);};
++    },
++    async prepareDiscussion(id,identity) {
++      if(!workspaces||!rpc)throw new Error('讨论工作区导航不可用');
++      const response=await rpc('status',{sessionId:id});
++      if(!response.ok)throw new Error(response.error?.message??'无法读取讨论会话');
++      const value=response.value;
++      const row=value.workflow?.session??value.runtime?.current;
++      if(row?.session_id!==id||row.role!=='discussion'||!row.cwd)throw new Error('讨论会话身份或工作目录不完整');
++      const label=`${row.node_id} · 讨论 · ${id.slice(-8)}`;
++      const snapshot=workspaces.list.getSnapshot();
++      let workspace=snapshot.items.find(w=>w.path===row.cwd);
++      if(!workspace) {
++        workspace=await workspaces.create({path:row.cwd});
++        await workspaces.rename(workspace.workspaceId,label);
++      }
++      if(!workspace.sessionIds.includes(id))await sessions.create({sessionId:id,workspaceId:workspace.workspaceId});
++      await sessions.refresh();
++      const entry=sessions.list.getSnapshot().byId[id];
++      if(!entry?.title||entry.title===row.cwd.split('/').at(-1)) {
++        const renamed=await sessions.binding(id)?.session.rename(label);
++        if(renamed&&!renamed.ok)throw new Error(renamed.error?.message??'无法设置讨论标题');
++      }
++      identities.set(id,{...identity,...row});
++      if(value.runtime?.main_session_id)projects.set(id,value.runtime.main_session_id);
+     },
+     async open(id,{parentSessionId,mainSessionId,identity}={}) {
+       if(!id)throw new Error('缺少会话标识');
+@@ -323,7 +347,7 @@
+ .ari-edge.ari-lineage path:not(.ari-edge-hit){stroke:#8b5cf6;stroke-width:2.5;stroke-dasharray:10 4}
+ /* DSH 0.1.2 chat-width handles span custom conversation slots. Disable their hit area only while Research is mounted; keep the native composer above the graph. */
+ [class$="_body"]:has(.ari-v5) > [class$="_widthHandle"][data-side]{pointer-events:none}
+-@media(max-width:1000px){.ari-layout{grid-template-columns:minmax(0,1fr)}.ari-details{border-left:0;border-top:1px solid var(--ari-line);padding:16px 0;max-height:none}.ari-canvas{height:440px}}@media(max-width:600px){.ari-v5{padding:12px 12px 200px}.ari-canvas{height:380px}.ari-stats{gap:12px}.ari-stats strong{font-size:16px}.ari-toolbar input{width:100%}.ari-receipt-row{flex-wrap:wrap}.ari-receipt-copy{flex-basis:calc(100% - 40px)}.ari-receipt-entry{display:block;margin-left:36px;white-space:normal}.ari-workbench-dialog{width:98vw;max-width:98vw;height:96dvh;max-height:96dvh}.ari-dialog-bar{padding:10px}}.ari-session-identity{display:flex;align-items:center;gap:8px;min-width:0;flex-wrap:wrap;font:inherit;border-left:3px solid #328c98;padding-left:10px}.ari-session-caption{display:grid;min-width:0;gap:2px}.ari-session-caption strong{font-size:13px}.ari-session-caption small{font-size:10px;opacity:.65;overflow-wrap:anywhere}.ari-session-identity[data-role="discussion"]{border-color:#aa762f}.ari-session-identity button{border:1px solid #89969b55;border-radius:5px;background:transparent;color:inherit;font:inherit;font-size:11px;padding:4px 7px;cursor:pointer}.ari-session-identity :focus-visible{outline:2px solid #328c98;outline-offset:2px}.ari-session-identity [role=alert]{font-size:11px;color:#b45353}.ari-app .ari-node-discuss{margin:0 0 10px 18px;font-size:12px}.ari-discussion-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px 0;border-bottom:1px solid var(--ari-line)}.ari-discussion-actions small{flex-basis:100%;font-size:11px;opacity:.7}.ari-app .ari-discussion-primary{background:#328c98;color:white;border-color:#328c98}.ari-discussion-actions details{font-size:12px;flex:0 0 auto}.ari-discussion-actions button{white-space:nowrap}.ari-discussion-actions summary{cursor:pointer}
++@media(max-width:1000px){.ari-layout{grid-template-columns:minmax(0,1fr)}.ari-details{border-left:0;border-top:1px solid var(--ari-line);padding:16px 0;max-height:none}.ari-canvas{height:440px}}@media(max-width:600px){.ari-v5{padding:12px 12px 200px}.ari-canvas{height:380px}.ari-stats{gap:12px}.ari-stats strong{font-size:16px}.ari-toolbar input{width:100%}.ari-receipt-row{flex-wrap:wrap}.ari-receipt-copy{flex-basis:calc(100% - 40px)}.ari-receipt-entry{display:block;margin-left:36px;white-space:normal}.ari-workbench-dialog{width:98vw;max-width:98vw;height:96dvh;max-height:96dvh}.ari-dialog-bar{padding:10px}}.ari-session-identity{display:flex;align-items:center;gap:8px;min-width:0;flex-wrap:wrap;font:inherit;border-left:3px solid #328c98;padding-left:10px}.ari-session-caption{display:grid;min-width:0;gap:2px}.ari-session-caption strong{font-size:13px}.ari-session-caption small{font-size:10px;opacity:.65;overflow-wrap:anywhere}.ari-session-identity[data-role="discussion"]{border-color:#aa762f}.ari-session-identity button{border:1px solid #89969b55;border-radius:5px;background:transparent;color:inherit;font:inherit;font-size:11px;padding:4px 7px;cursor:pointer}.ari-session-identity :focus-visible{outline:2px solid #328c98;outline-offset:2px}.ari-session-identity [role=alert]{font-size:11px;color:#b45353}.ari-app .ari-node-discuss{margin:0 0 10px 18px;font-size:12px}.ari-discussion-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px 0;border-bottom:1px solid var(--ari-line)}.ari-discussion-actions small{flex-basis:100%;font-size:11px;opacity:.7}.ari-discussion-actions details{font-size:12px;flex:0 0 auto}.ari-discussion-actions button{white-space:nowrap}.ari-discussion-actions summary{cursor:pointer}
+ @media(prefers-reduced-motion:reduce){.ari-v5 *{transition:none!important;animation:none!important}}
+ `;
+ 
+@@ -771,7 +795,7 @@
+           selectedNode&&h('aside',{className:'ari-detail','aria-label':'节点详情',style:detailOverlayStyle()},
+             h('div',{className:'ari-detail-head'},h('strong',null,selectedNode),button('关闭',()=>{selectionSeq.current++;setSelectedNode(null);setNodeDetail(null);})),
+             h('div',{className:'ari-discussion-actions'},
+-              button('围绕此节点讨论',()=>act('discussion.open',{nodeId:selectedNode}),{disabled,className:'ari-discussion-primary'}),
++              button('围绕此节点讨论',()=>act('discussion.open',{nodeId:selectedNode}),{disabled,className:'ari-primary'}),
+               h('details',null,h('summary',null,'更多'),button('新建另一场讨论',()=>act('discussion.open',{nodeId:selectedNode,fresh:true}),{disabled})),
+               h('small',null,'在独立会话中讨论；已有讨论会继续打开。')),
+             h('div',{className:'ari-detail-tabs'},...[['result','结果'],['evidence','证据'],['history','计划与历史']].map(([id,name])=>button(name,()=>setDetailTab(id),{'aria-pressed':detailTab===id,key:id}))),
+@@ -1066,14 +1090,15 @@
+     const associated=snapshot?.associated;
+     const [navigationError,setNavigationError]=React.useState('');
+     let target;try{if(snapshot?.command?.kind==='success')target=JSON.parse(snapshot.command.text)?.sessionId;}catch{}
+-    const openResult=async()=>{try{setNavigationError('');await navigation.open(target,{mainSessionId:snapshot?.mainSessionId});}catch(e){setNavigationError(e.message);}};
++    const openResult=async()=>{try{setNavigationError('');if(target.startsWith('discussion-'))await navigation.prepareDiscussion(target);await navigation.open(target,{mainSessionId:snapshot?.mainSessionId});}catch(e){setNavigationError(e.message);}};
+     return h(React.Fragment,null,
+       h('style',null,researchStyles),
+       h('aside',{className:`ari-receipt ${failed?'ari-receipt-error':''}`},
+         h('div',{className:'ari-receipt-row'},h('span',{className:'ari-receipt-mark','aria-hidden':'true'},failed?'!':'R'),
+           h('span',{className:'ari-receipt-copy'},
+             h('strong',null,associated?`当前输入：${researchSessionLabel(snapshot.identity)}`:'Research / 研究项目'),
+-            h('small',null,associated?`${snapshot.project?.control==='auto'?'自动推进已开启':snapshot.project?.control==='manual'?'已初始化 · 规划模式':snapshot.project?.control} · ${snapshot.runtime?.current?.pending_approvals?'当前对话等待审批':snapshot.runtime?.current?.native_status==='running'?'当前对话正在工作':'当前对话空闲'} · 待审批 ${snapshot.runtime?.pending_approvals??0}`:'初始化与关联无需发送消息或调用模型')),
++            h('small',null,associated&&snapshot.identity?.role==='discussion'?'独立讨论 · 消息发送到此讨论会话':associated?`${snapshot.project?.control==='auto'?'自动推进已开启':snapshot.project?.control==='manual'?'已初始化 · 规划模式':snapshot.project?.control} · ${snapshot.runtime?.current?.pending_approvals?'当前对话等待审批':snapshot.runtime?.current?.native_status==='running'?'当前对话正在工作':'当前对话空闲'} · 待审批 ${snapshot.runtime?.pending_approvals??0}`:'初始化与关联无需发送消息或调用模型')),
++          snapshot?.mainSessionId&&snapshot.mainSessionId!==sessionId&&h('button',{type:'button',onClick:async()=>{try{setNavigationError('');await navigation.open(snapshot.mainSessionId);}catch(e){setNavigationError(e.message);}}},'返回主会话'),
+           h('button',{type:'button',className:'ari-receipt-entry','aria-haspopup':'dialog',onClick:()=>setOpened(true)},'打开研究工作台')),
+         snapshot?.command&&h('div',{key:snapshot.commandSequence,className:'ari-command-result'},
+           h('p',{role:failed?'alert':'status','aria-live':'polite'},`Research 命令${failed?'失败':'已完成'} · 第 ${snapshot.commandSequence} 次 · ${snapshot.commandTime}`),
+@@ -1085,11 +1110,11 @@
+   };
+ }
+ 
+-return {inject:['slots','connection','sessions'],apply(ctx){
++return {inject:['slots','connection','sessions','workspaces'],apply(ctx){
+ const rpc=(endpoint,payload)=>ctx.connection.rpc.call('/research-v5',endpoint,payload);
+ const Graph=createResearchGraph(React,layoutGraph,inViewport,clampZoom);
+-const navigation=createResearchSessionNavigation(ctx.sessions);
+-const Workbench=createResearchWorkbench(React,rpc,(id,options)=>navigation.open(id,options),projectGraph,Graph,(()=>{try{return require('@deepseek-ai/dsh-client-ui-primitives').MarkdownText;}catch{return null;}})(),researchStyles+researchAppStyles,navigation.bind,navigation.context);
++const navigation=createResearchSessionNavigation(ctx.sessions,ctx.workspaces,rpc);
++const Workbench=createResearchWorkbench(React,rpc,async(id,options)=>{if(options?.identity?.role==='discussion')await navigation.prepareDiscussion(id,options.identity);return navigation.open(id,options);},projectGraph,Graph,(()=>{try{return require('@deepseek-ai/dsh-client-ui-primitives').MarkdownText;}catch{return null;}})(),researchStyles+researchAppStyles,navigation.bind,navigation.context);
+ const Receipt=createResearchReceipt(React,Workbench,researchStyles+researchAppStyles),receipts=createReceiptState(rpc,undefined,navigation.context),Identity=createResearchSessionIdentity(React,researchStyles+researchAppStyles);
+ ctx.on('command/executed',receipts.executed);
+ ctx.slots.inject('conversation.input.dock',()=>{let dispose,registeredStore;const register=()=>{const store=ctx.slots.entries('conversation.session').find(entry=>entry.store)?.store;if(!store||store===registeredStore)return;dispose?.();registeredStore=store;dispose=ctx.slots.register({name:'conversation.input.dock',id:'research-receipt',order:20,store,inject:(sessionId,actions)=>({sessionId,actions,navigation,hooks:{receipt:receipts.store(sessionId)},refresh:receipts.refresh})},props=>React.createElement(Receipt,{...props,key:props.sessionId}));};const unsubscribe=ctx.slots.subscribe('conversation.session',register);register();return()=>{unsubscribe();dispose?.();};});
+--- a/frontend/receipt.js
++++ b/frontend/receipt.js
+@@ -23,14 +23,15 @@
+     const associated=snapshot?.associated;
+     const [navigationError,setNavigationError]=React.useState('');
+     let target;try{if(snapshot?.command?.kind==='success')target=JSON.parse(snapshot.command.text)?.sessionId;}catch{}
+-    const openResult=async()=>{try{setNavigationError('');await navigation.open(target,{mainSessionId:snapshot?.mainSessionId});}catch(e){setNavigationError(e.message);}};
++    const openResult=async()=>{try{setNavigationError('');if(target.startsWith('discussion-'))await navigation.prepareDiscussion(target);await navigation.open(target,{mainSessionId:snapshot?.mainSessionId});}catch(e){setNavigationError(e.message);}};
+     return h(React.Fragment,null,
+       h('style',null,researchStyles),
+       h('aside',{className:`ari-receipt ${failed?'ari-receipt-error':''}`},
+         h('div',{className:'ari-receipt-row'},h('span',{className:'ari-receipt-mark','aria-hidden':'true'},failed?'!':'R'),
+           h('span',{className:'ari-receipt-copy'},
+             h('strong',null,associated?`当前输入：${researchSessionLabel(snapshot.identity)}`:'Research / 研究项目'),
+-            h('small',null,associated?`${snapshot.project?.control==='auto'?'自动推进已开启':snapshot.project?.control==='manual'?'已初始化 · 规划模式':snapshot.project?.control} · ${snapshot.runtime?.current?.pending_approvals?'当前对话等待审批':snapshot.runtime?.current?.native_status==='running'?'当前对话正在工作':'当前对话空闲'} · 待审批 ${snapshot.runtime?.pending_approvals??0}`:'初始化与关联无需发送消息或调用模型')),
++            h('small',null,associated&&snapshot.identity?.role==='discussion'?'独立讨论 · 消息发送到此讨论会话':associated?`${snapshot.project?.control==='auto'?'自动推进已开启':snapshot.project?.control==='manual'?'已初始化 · 规划模式':snapshot.project?.control} · ${snapshot.runtime?.current?.pending_approvals?'当前对话等待审批':snapshot.runtime?.current?.native_status==='running'?'当前对话正在工作':'当前对话空闲'} · 待审批 ${snapshot.runtime?.pending_approvals??0}`:'初始化与关联无需发送消息或调用模型')),
++          snapshot?.mainSessionId&&snapshot.mainSessionId!==sessionId&&h('button',{type:'button',onClick:async()=>{try{setNavigationError('');await navigation.open(snapshot.mainSessionId);}catch(e){setNavigationError(e.message);}}},'返回主会话'),
+           h('button',{type:'button',className:'ari-receipt-entry','aria-haspopup':'dialog',onClick:()=>setOpened(true)},'打开研究工作台')),
+         snapshot?.command&&h('div',{key:snapshot.commandSequence,className:'ari-command-result'},
+           h('p',{role:failed?'alert':'status','aria-live':'polite'},`Research 命令${failed?'失败':'已完成'} · 第 ${snapshot.commandSequence} 次 · ${snapshot.commandTime}`),
+--- a/frontend/session-navigation.js
++++ b/frontend/session-navigation.js
+@@ -1,5 +1,5 @@
+ /** Native session selection and Chat navigation, including same-session opens. */
+-export function createResearchSessionNavigation(sessions) {
++export function createResearchSessionNavigation(sessions,workspaces,rpc) {
+   const bindings=new Map(),projects=new Map(),identities=new Map();let pending=null;
+   function arrive(id) {
+     const binding=[...(bindings.get(id)??[])].at(-1);
+@@ -20,6 +20,30 @@
+       if(typeof actions?.setView!=='function')throw new Error('原生对话导航不可用');
+       const active=bindings.get(id)??new Set();active.add(actions);bindings.set(id,active);arrive(id);
+       return()=>{active.delete(actions);if(!active.size)bindings.delete(id);};
++    },
++    async prepareDiscussion(id,identity) {
++      if(!workspaces||!rpc)throw new Error('讨论工作区导航不可用');
++      const response=await rpc('status',{sessionId:id});
++      if(!response.ok)throw new Error(response.error?.message??'无法读取讨论会话');
++      const value=response.value;
++      const row=value.workflow?.session??value.runtime?.current;
++      if(row?.session_id!==id||row.role!=='discussion'||!row.cwd)throw new Error('讨论会话身份或工作目录不完整');
++      const label=`${row.node_id} · 讨论 · ${id.slice(-8)}`;
++      const snapshot=workspaces.list.getSnapshot();
++      let workspace=snapshot.items.find(w=>w.path===row.cwd);
++      if(!workspace) {
++        workspace=await workspaces.create({path:row.cwd});
++        await workspaces.rename(workspace.workspaceId,label);
++      }
++      if(!workspace.sessionIds.includes(id))await sessions.create({sessionId:id,workspaceId:workspace.workspaceId});
++      await sessions.refresh();
++      const entry=sessions.list.getSnapshot().byId[id];
++      if(!entry?.title||entry.title===row.cwd.split('/').at(-1)) {
++        const renamed=await sessions.binding(id)?.session.rename(label);
++        if(renamed&&!renamed.ok)throw new Error(renamed.error?.message??'无法设置讨论标题');
++      }
++      identities.set(id,{...identity,...row});
++      if(value.runtime?.main_session_id)projects.set(id,value.runtime.main_session_id);
+     },
+     async open(id,{parentSessionId,mainSessionId,identity}={}) {
+       if(!id)throw new Error('缺少会话标识');
+--- a/frontend/styles.js
++++ b/frontend/styles.js
+@@ -8,6 +8,6 @@
+ .ari-edge.ari-lineage path:not(.ari-edge-hit){stroke:#8b5cf6;stroke-width:2.5;stroke-dasharray:10 4}
+ /* DSH 0.1.2 chat-width handles span custom conversation slots. Disable their hit area only while Research is mounted; keep the native composer above the graph. */
+ [class$="_body"]:has(.ari-v5) > [class$="_widthHandle"][data-side]{pointer-events:none}
+-@media(max-width:1000px){.ari-layout{grid-template-columns:minmax(0,1fr)}.ari-details{border-left:0;border-top:1px solid var(--ari-line);padding:16px 0;max-height:none}.ari-canvas{height:440px}}@media(max-width:600px){.ari-v5{padding:12px 12px 200px}.ari-canvas{height:380px}.ari-stats{gap:12px}.ari-stats strong{font-size:16px}.ari-toolbar input{width:100%}.ari-receipt-row{flex-wrap:wrap}.ari-receipt-copy{flex-basis:calc(100% - 40px)}.ari-receipt-entry{display:block;margin-left:36px;white-space:normal}.ari-workbench-dialog{width:98vw;max-width:98vw;height:96dvh;max-height:96dvh}.ari-dialog-bar{padding:10px}}.ari-session-identity{display:flex;align-items:center;gap:8px;min-width:0;flex-wrap:wrap;font:inherit;border-left:3px solid #328c98;padding-left:10px}.ari-session-caption{display:grid;min-width:0;gap:2px}.ari-session-caption strong{font-size:13px}.ari-session-caption small{font-size:10px;opacity:.65;overflow-wrap:anywhere}.ari-session-identity[data-role="discussion"]{border-color:#aa762f}.ari-session-identity button{border:1px solid #89969b55;border-radius:5px;background:transparent;color:inherit;font:inherit;font-size:11px;padding:4px 7px;cursor:pointer}.ari-session-identity :focus-visible{outline:2px solid #328c98;outline-offset:2px}.ari-session-identity [role=alert]{font-size:11px;color:#b45353}.ari-app .ari-node-discuss{margin:0 0 10px 18px;font-size:12px}.ari-discussion-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px 0;border-bottom:1px solid var(--ari-line)}.ari-discussion-actions small{flex-basis:100%;font-size:11px;opacity:.7}.ari-app .ari-discussion-primary{background:#328c98;color:white;border-color:#328c98}.ari-discussion-actions details{font-size:12px;flex:0 0 auto}.ari-discussion-actions button{white-space:nowrap}.ari-discussion-actions summary{cursor:pointer}
++@media(max-width:1000px){.ari-layout{grid-template-columns:minmax(0,1fr)}.ari-details{border-left:0;border-top:1px solid var(--ari-line);padding:16px 0;max-height:none}.ari-canvas{height:440px}}@media(max-width:600px){.ari-v5{padding:12px 12px 200px}.ari-canvas{height:380px}.ari-stats{gap:12px}.ari-stats strong{font-size:16px}.ari-toolbar input{width:100%}.ari-receipt-row{flex-wrap:wrap}.ari-receipt-copy{flex-basis:calc(100% - 40px)}.ari-receipt-entry{display:block;margin-left:36px;white-space:normal}.ari-workbench-dialog{width:98vw;max-width:98vw;height:96dvh;max-height:96dvh}.ari-dialog-bar{padding:10px}}.ari-session-identity{display:flex;align-items:center;gap:8px;min-width:0;flex-wrap:wrap;font:inherit;border-left:3px solid #328c98;padding-left:10px}.ari-session-caption{display:grid;min-width:0;gap:2px}.ari-session-caption strong{font-size:13px}.ari-session-caption small{font-size:10px;opacity:.65;overflow-wrap:anywhere}.ari-session-identity[data-role="discussion"]{border-color:#aa762f}.ari-session-identity button{border:1px solid #89969b55;border-radius:5px;background:transparent;color:inherit;font:inherit;font-size:11px;padding:4px 7px;cursor:pointer}.ari-session-identity :focus-visible{outline:2px solid #328c98;outline-offset:2px}.ari-session-identity [role=alert]{font-size:11px;color:#b45353}.ari-app .ari-node-discuss{margin:0 0 10px 18px;font-size:12px}.ari-discussion-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px 0;border-bottom:1px solid var(--ari-line)}.ari-discussion-actions small{flex-basis:100%;font-size:11px;opacity:.7}.ari-discussion-actions details{font-size:12px;flex:0 0 auto}.ari-discussion-actions button{white-space:nowrap}.ari-discussion-actions summary{cursor:pointer}
+ @media(prefers-reduced-motion:reduce){.ari-v5 *{transition:none!important;animation:none!important}}
+ `;
+--- a/frontend/workbench-app.js
++++ b/frontend/workbench-app.js
+@@ -308,7 +308,7 @@
+           selectedNode&&h('aside',{className:'ari-detail','aria-label':'节点详情',style:detailOverlayStyle()},
+             h('div',{className:'ari-detail-head'},h('strong',null,selectedNode),button('关闭',()=>{selectionSeq.current++;setSelectedNode(null);setNodeDetail(null);})),
+             h('div',{className:'ari-discussion-actions'},
+-              button('围绕此节点讨论',()=>act('discussion.open',{nodeId:selectedNode}),{disabled,className:'ari-discussion-primary'}),
++              button('围绕此节点讨论',()=>act('discussion.open',{nodeId:selectedNode}),{disabled,className:'ari-primary'}),
+               h('details',null,h('summary',null,'更多'),button('新建另一场讨论',()=>act('discussion.open',{nodeId:selectedNode,fresh:true}),{disabled})),
+               h('small',null,'在独立会话中讨论；已有讨论会继续打开。')),
+             h('div',{className:'ari-detail-tabs'},...[['result','结果'],['evidence','证据'],['history','计划与历史']].map(([id,name])=>button(name,()=>setDetailTab(id),{'aria-pressed':detailTab===id,key:id}))),
+--- a/scripts/build-client.mjs
++++ b/scripts/build-client.mjs
+@@ -4,6 +4,6 @@
+ const root=join(dirname(fileURLToPath(import.meta.url)),'..');
+ const files=['session-navigation','session-groups','model','layout','graph','styles','app-styles','markdown','publication','workbench-app','receipt-state','session-identity','receipt'];
+ const source=files.map(name=>readFileSync(join(root,'frontend',`${name}.js`),'utf8').replace(/^export /gm,'').replace(/^import .*;\s*$/gm,'')).join('\n');
+-const client=`/* Generated by scripts/build-client.mjs; edit frontend/ sources. */\nwindow.__ModuleLoader__.load({id:'auto-research-v5',factory:require=>{\nconst React=require('react');\n${source}\nreturn {inject:['slots','connection','sessions'],apply(ctx){\nconst rpc=(endpoint,payload)=>ctx.connection.rpc.call('/research-v5',endpoint,payload);\nconst Graph=createResearchGraph(React,layoutGraph,inViewport,clampZoom);\nconst navigation=createResearchSessionNavigation(ctx.sessions);\nconst Workbench=createResearchWorkbench(React,rpc,(id,options)=>navigation.open(id,options),projectGraph,Graph,(()=>{try{return require('@deepseek-ai/dsh-client-ui-primitives').MarkdownText;}catch{return null;}})(),researchStyles+researchAppStyles,navigation.bind,navigation.context);\nconst Receipt=createResearchReceipt(React,Workbench,researchStyles+researchAppStyles),receipts=createReceiptState(rpc,undefined,navigation.context),Identity=createResearchSessionIdentity(React,researchStyles+researchAppStyles);\nctx.on('command/executed',receipts.executed);\nctx.slots.inject('conversation.input.dock',()=>{let dispose,registeredStore;const register=()=>{const store=ctx.slots.entries('conversation.session').find(entry=>entry.store)?.store;if(!store||store===registeredStore)return;dispose?.();registeredStore=store;dispose=ctx.slots.register({name:'conversation.input.dock',id:'research-receipt',order:20,store,inject:(sessionId,actions)=>({sessionId,actions,navigation,hooks:{receipt:receipts.store(sessionId)},refresh:receipts.refresh})},props=>React.createElement(Receipt,{...props,key:props.sessionId}));};const unsubscribe=ctx.slots.subscribe('conversation.session',register);register();return()=>{unsubscribe();dispose?.();};});\nctx.slots.inject('conversation.session.header.actions',()=>{let dispose,registeredStore;const register=()=>{const store=ctx.slots.entries('conversation.session').find(entry=>entry.store)?.store;if(!store||store===registeredStore)return;dispose?.();registeredStore=store;dispose=ctx.slots.register({name:'conversation.session.header.actions',id:'research-identity',order:5,store,inject:(sessionId,actions)=>({sessionId,actions,navigation,hooks:{receipt:receipts.store(sessionId)},refresh:receipts.refresh})},props=>React.createElement(Identity,{...props,key:props.sessionId}));};const unsubscribe=ctx.slots.subscribe('conversation.session',register);register();return()=>{unsubscribe();dispose?.();};});\nctx.slots.inject('conversation.view',()=>ctx.slots.register({name:'conversation.view',id:'research-v5',order:51,label:'Research'},props=>React.createElement(Workbench,{...props,key:props.sessionId})));\n}};\n}});\n`;
++const client=`/* Generated by scripts/build-client.mjs; edit frontend/ sources. */\nwindow.__ModuleLoader__.load({id:'auto-research-v5',factory:require=>{\nconst React=require('react');\n${source}\nreturn {inject:['slots','connection','sessions','workspaces'],apply(ctx){\nconst rpc=(endpoint,payload)=>ctx.connection.rpc.call('/research-v5',endpoint,payload);\nconst Graph=createResearchGraph(React,layoutGraph,inViewport,clampZoom);\nconst navigation=createResearchSessionNavigation(ctx.sessions,ctx.workspaces,rpc);\nconst Workbench=createResearchWorkbench(React,rpc,async(id,options)=>{if(options?.identity?.role==='discussion')await navigation.prepareDiscussion(id,options.identity);return navigation.open(id,options);},projectGraph,Graph,(()=>{try{return require('@deepseek-ai/dsh-client-ui-primitives').MarkdownText;}catch{return null;}})(),researchStyles+researchAppStyles,navigation.bind,navigation.context);\nconst Receipt=createResearchReceipt(React,Workbench,researchStyles+researchAppStyles),receipts=createReceiptState(rpc,undefined,navigation.context),Identity=createResearchSessionIdentity(React,researchStyles+researchAppStyles);\nctx.on('command/executed',receipts.executed);\nctx.slots.inject('conversation.input.dock',()=>{let dispose,registeredStore;const register=()=>{const store=ctx.slots.entries('conversation.session').find(entry=>entry.store)?.store;if(!store||store===registeredStore)return;dispose?.();registeredStore=store;dispose=ctx.slots.register({name:'conversation.input.dock',id:'research-receipt',order:20,store,inject:(sessionId,actions)=>({sessionId,actions,navigation,hooks:{receipt:receipts.store(sessionId)},refresh:receipts.refresh})},props=>React.createElement(Receipt,{...props,key:props.sessionId}));};const unsubscribe=ctx.slots.subscribe('conversation.session',register);register();return()=>{unsubscribe();dispose?.();};});\nctx.slots.inject('conversation.session.header.actions',()=>{let dispose,registeredStore;const register=()=>{const store=ctx.slots.entries('conversation.session').find(entry=>entry.store)?.store;if(!store||store===registeredStore)return;dispose?.();registeredStore=store;dispose=ctx.slots.register({name:'conversation.session.header.actions',id:'research-identity',order:5,store,inject:(sessionId,actions)=>({sessionId,actions,navigation,hooks:{receipt:receipts.store(sessionId)},refresh:receipts.refresh})},props=>React.createElement(Identity,{...props,key:props.sessionId}));};const unsubscribe=ctx.slots.subscribe('conversation.session',register);register();return()=>{unsubscribe();dispose?.();};});\nctx.slots.inject('conversation.view',()=>ctx.slots.register({name:'conversation.view',id:'research-v5',order:51,label:'Research'},props=>React.createElement(Workbench,{...props,key:props.sessionId})));\n}};\n}});\n`;
+ if(process.argv.includes('--check')){if(readFileSync(join(root,'client.js'),'utf8')!==client)throw new Error('client.js is stale; run npm run build:client');}
+ else writeFileSync(join(root,'client.js'),client);

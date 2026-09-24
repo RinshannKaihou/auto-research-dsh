@@ -134,3 +134,39 @@ def test_binary_and_oversized_materials_have_bounded_read_states(tmp_path):
     assert last["next_offset"] is None
     assert last["total_bytes"] == workbench_read.PREVIEW_LIMIT + 100
     assert "chunk" not in workbench_read.reference_content(store, root, "pub/P-999#absent")
+
+
+def test_specialist_page_retains_durable_parent_after_exit(tmp_path):
+    store, _, _ = initialized(tmp_path)
+    task = store.specialist_create({"parent_session_id": "parent-node", "purpose": "domain",
+                                    "label": "expert", "prompt": "read only", "inputs": []}, "expert-create")
+    store.specialist_bind({"task_id": task["task_id"], "parent_session_id": "parent-node",
+                                 "session_id": "finished-child"}, "expert-bind")
+    store.specialist_finish({"task_id": task["task_id"], "state": "cancelled",
+                             "result": {}, "exit_verified": True}, "expert-finish")
+    page = workbench_read.page(store, "specialists")
+    assert page["items"][0]["parent_session_id"] == "parent-node"
+    assert page["items"][0]["child_session_id"] == "finished-child"
+    assert page["items"][0]["state"] == "cancelled"
+    assert "prompt" not in page["items"][0]
+
+
+def test_session_page_projects_bounded_specialist_identity_without_ledger_writes(tmp_path):
+    store, _, _ = initialized(tmp_path)
+    task = store.specialist_create({"parent_session_id": "main", "purpose": "domain",
+                                    "label": "Check citation " * 50, "prompt": "private long prompt", "inputs": []}, "create")
+    store.specialist_bind({"task_id": task["task_id"], "parent_session_id": "main",
+                           "session_id": "child"}, "bind")
+    store.workflow("host", "child", "register", {"role": "specialist"}, "register-child")
+    store.specialist_finish({"task_id": task["task_id"], "state": "cancelled",
+                             "result": {}, "exit_verified": True}, "finish")
+    before = hashlib.sha256(store.db_path.read_bytes()).hexdigest()
+    first = workbench_read.page(store, "sessions", limit=1)
+    second = workbench_read.page(store, "sessions", limit=1, **first["cursor"])
+    row = second["items"][0]
+    assert row["session_id"] == "child" and row["parent_session_id"] == "main"
+    assert row["task_id"] == task["task_id"] and row["label"].startswith("Check citation")
+    assert row["specialist_state"] == "cancelled"
+    assert len(row["label"]) <= 241 and "prompt" not in row
+    assert first["items"][0]["role"] == "main"
+    assert hashlib.sha256(store.db_path.read_bytes()).hexdigest() == before

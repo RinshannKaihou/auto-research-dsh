@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "auto-research-graph"
-version = "0.6.10"
+version = "0.6.11"
 description = "Research state and offline migration for the native DSH plugin"
 requires-python = ">=3.11"
 dependencies = []

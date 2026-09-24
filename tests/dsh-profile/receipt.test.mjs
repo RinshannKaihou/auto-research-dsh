@@ -55,7 +55,8 @@ test('blank unassociated receipt opens real workbench dialog with no prompt or t
   dialog.props.ref.current={showModal:()=>shown++,close:()=>closed++};
   host.effects.at(-1)();assert.equal(shown,1);
   assert.equal(find(modalTree,n=>n.type===Workbench).props.sessionId,'blank');
-  find(modalTree,n=>n.type==='button').props.onClick();assert.equal(closed,1);
+  find(modalTree,n=>n.type===Workbench).props.onSessionOpened();assert.equal(closed,1);
+  find(modalTree,n=>n.type==='button').props.onClick();assert.equal(closed,2);
   dialog.props.onClose();tree=host.render(()=>Receipt(props));
   assert.equal(find(tree,n=>typeof n.type==='function'),null);assert.deepEqual(refreshes,['blank']);
 });
@@ -72,10 +73,13 @@ test('generated client wires per-session hooks and remount keys through public d
   const registrations=[],events={},React={createElement:(type,props)=>({type,props})};let entry;
   const source=readFileSync(new URL('../../apps/dsh/plugin/client.js',import.meta.url),'utf8');
   vm.runInNewContext(source,{window:{__ModuleLoader__:{load:value=>entry=value}}});
-  entry.factory(()=>React).apply({slots:{inject:(_name,fn)=>fn(),register:(options,component)=>registrations.push({options,component})},
+  entry.factory(()=>React).apply({slots:{entries:()=>[{store:'native-conversation-store'}],subscribe:()=>()=>{},inject:(_name,fn)=>fn(),register:(options,component)=>registrations.push({options,component})},
     connection:{rpc:{call:async()=>ok('fixture')}},sessions:{open:()=>assert.fail('must not open a native session')},on:(name,fn)=>events[name]=fn});
   const dock=registrations.find(r=>r.options.name==='conversation.input.dock');
-  const a=dock.options.inject('A'),b=dock.options.inject('B');
+  assert.equal(dock.options.store,'native-conversation-store');
+  const actions={setView:()=>{}};
+  const a=dock.options.inject('A',actions),b=dock.options.inject('B',actions);
+  assert.equal(a.actions,actions);assert.equal(typeof a.navigation.bind,'function');
   events['command/executed']('A','research',{kind:'success',text:'visible'});await tick();
   assert.equal(a.hooks.receipt.getSnapshot().command.text,'visible');assert.equal(b.hooks.receipt.getSnapshot(),null);
   assert.equal(dock.component(a).props.key,'A');assert.equal(dock.component(b).props.key,'B');
@@ -89,4 +93,39 @@ test('server RPC failures satisfy DSH failure envelope instead of hiding the dom
   assert.equal(result.ok,false);assert.equal(result.error.message,'The native session is not currently attached');
   assert.equal(typeof result.error.code,'string');assert.equal(typeof result.error.details,'object');
   assert.notEqual(result.error.details,null);
+});
+
+test('navigation dock waits for the native conversation store to register',()=>{
+  let entry,store;const changes=[],registrations=[];
+  const source=readFileSync(new URL('../../apps/dsh/plugin/client.js',import.meta.url),'utf8');
+  vm.runInNewContext(source,{window:{__ModuleLoader__:{load:value=>entry=value}}});
+  entry.factory(()=>({})).apply({slots:{entries:()=>store?[{store}]:[],subscribe:(_name,fn)=>{changes.push(fn);return()=>{};},inject:(_name,fn)=>fn(),register:options=>{registrations.push(options);return()=>{};}},
+    connection:{rpc:{call:async()=>ok('fixture')}},sessions:{},on:()=>{}});
+  assert(!registrations.some(options=>options.name==='conversation.input.dock'));
+  store={create:()=>{}};changes.forEach(fn=>fn());
+  const docks=registrations.filter(options=>options.name==='conversation.input.dock');
+  assert.equal(docks.length,1);assert.equal(docks[0].store,store);
+  changes.forEach(fn=>fn());assert.equal(registrations.filter(options=>options.name==='conversation.input.dock').length,1);
+});
+
+test('current identity is read from durable session when runtime is paginated and is isolated across sessions',async()=>{
+  const state=createReceiptState(async(_e,p)=>({ok:true,value:{runtime:{main_session_id:'main',sessions:[]},workflow:{session:{session_id:p.sessionId,role:p.sessionId==='main'?'main':'discussion',node_id:p.sessionId==='main'?null:'X-004'}}}}));
+  await state.refresh('discussion-a');await state.refresh('main');
+  assert.equal(state.store('discussion-a').getSnapshot().identity.role,'discussion');
+  assert.equal(state.store('discussion-a').getSnapshot().identity.node_id,'X-004');
+  assert.equal(state.store('main').getSnapshot().identity.role,'main');
+});
+
+test('completed expert reads through parent while retaining expert identity, never parent current state',async()=>{
+  const calls=[],state=createReceiptState(async(e,p)=>{calls.push(p.sessionId);return {ok:true,value:{runtime:{main_session_id:'main',current:{session_id:'main',native_status:'running'},sessions:[{session_id:'parent',role:'node_core',node_id:'X-004'}]},workflow:{session:{session_id:'main',role:'main'}}}};},undefined,()=>({parentSessionId:'parent',mainSessionId:'main'}));
+  await state.refresh('expert');const value=state.store('expert').getSnapshot();
+  assert.deepEqual(calls,['main']);assert.equal(value.identity.role,'specialist');assert.equal(value.identity.node_id,'X-004');assert.equal(value.runtime.current,undefined);
+});
+
+test('successful command result has direct target navigation and composer names the recipient',async()=>{
+  const host=hooks(),opened=[],Receipt=createResearchReceipt(host.React,()=>{},'');
+  const tree=host.render(()=>Receipt({sessionId:'discussion-a',refresh:()=>{},navigation:{prepareDiscussion:async()=>{},open:async(...args)=>opened.push(args)},useReceipt:select=>select({associated:true,identity:{role:'discussion',node_id:'X-004'},mainSessionId:'main',command:{kind:'success',text:JSON.stringify({sessionId:'discussion-b'})}})}));
+  assert.equal(find(tree,n=>n.type==='strong').children[0],'当前输入：X-004 · 讨论');
+  await find(tree,n=>n.type==='button'&&n.children[0]==='打开目标会话').props.onClick();
+  assert.deepEqual(opened,[['discussion-b',{mainSessionId:'main'}]]);
 });

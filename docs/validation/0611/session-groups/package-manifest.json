@@ -1,0 +1,291 @@
+[
+  {
+    "id": "auto-research-v5@0.6.11",
+    "name": "auto-research-v5",
+    "version": "0.6.11",
+    "size": 220665,
+    "unpackedSize": 879022,
+    "shasum": "e62a6c9b9300f80d98687cde7fdfd02044c10e2e",
+    "integrity": "sha512-EXJqoSpwO868PadFjFSZDQ+fsecc5k7SXicvcwI2RBvZvxrBAxW8LjaIbw7dHCtQT7WSn6oqiGb/ir4qPp5DDA==",
+    "filename": "auto-research-v5-0.6.11.tgz",
+    "files": [
+      {
+        "path": "LICENSES/SCIENCEFLOW.md",
+        "size": 914,
+        "mode": 420
+      },
+      {
+        "path": "README.md",
+        "size": 19061,
+        "mode": 420
+      },
+      {
+        "path": "client.js",
+        "size": 124483,
+        "mode": 420
+      },
+      {
+        "path": "commands.js",
+        "size": 4732,
+        "mode": 420
+      },
+      {
+        "path": "cordis.patch.yml",
+        "size": 83,
+        "mode": 420
+      },
+      {
+        "path": "domain.js",
+        "size": 55813,
+        "mode": 420
+      },
+      {
+        "path": "events.js",
+        "size": 12770,
+        "mode": 420
+      },
+      {
+        "path": "examples/vllm-stability.research.presentation.json",
+        "size": 4442,
+        "mode": 420
+      },
+      {
+        "path": "frontend/app-styles.js",
+        "size": 18976,
+        "mode": 420
+      },
+      {
+        "path": "frontend/details.js",
+        "size": 7971,
+        "mode": 420
+      },
+      {
+        "path": "frontend/graph.js",
+        "size": 8150,
+        "mode": 420
+      },
+      {
+        "path": "frontend/layout.js",
+        "size": 2951,
+        "mode": 420
+      },
+      {
+        "path": "frontend/markdown.js",
+        "size": 3404,
+        "mode": 420
+      },
+      {
+        "path": "frontend/model.js",
+        "size": 5374,
+        "mode": 420
+      },
+      {
+        "path": "frontend/publication.js",
+        "size": 4870,
+        "mode": 420
+      },
+      {
+        "path": "frontend/receipt-state.js",
+        "size": 2494,
+        "mode": 420
+      },
+      {
+        "path": "frontend/receipt.js",
+        "size": 3702,
+        "mode": 420
+      },
+      {
+        "path": "frontend/session-groups.js",
+        "size": 1918,
+        "mode": 420
+      },
+      {
+        "path": "frontend/session-identity.js",
+        "size": 1825,
+        "mode": 420
+      },
+      {
+        "path": "frontend/session-navigation.js",
+        "size": 3246,
+        "mode": 420
+      },
+      {
+        "path": "frontend/styles.js",
+        "size": 10168,
+        "mode": 420
+      },
+      {
+        "path": "frontend/workbench-app.js",
+        "size": 55423,
+        "mode": 420
+      },
+      {
+        "path": "frontend/workbench.js",
+        "size": 23305,
+        "mode": 420
+      },
+      {
+        "path": "index.js",
+        "size": 8875,
+        "mode": 420
+      },
+      {
+        "path": "ipc.js",
+        "size": 4786,
+        "mode": 420
+      },
+      {
+        "path": "package.json",
+        "size": 902,
+        "mode": 420
+      },
+      {
+        "path": "python/auto_research/__init__.py",
+        "size": 102,
+        "mode": 420
+      },
+      {
+        "path": "python/auto_research/artifacts.py",
+        "size": 18552,
+        "mode": 420
+      },
+      {
+        "path": "python/auto_research/epistemic.py",
+        "size": 47463,
+        "mode": 420
+      },
+      {
+        "path": "python/auto_research/errors.py",
+        "size": 379,
+        "mode": 420
+      },
+      {
+        "path": "python/auto_research/field_checks.py",
+        "size": 7980,
+        "mode": 420
+      },
+      {
+        "path": "python/auto_research/frozen_refs.py",
+        "size": 7770,
+        "mode": 420
+      },
+      {
+        "path": "python/auto_research/hints.py",
+        "size": 7884,
+        "mode": 420
+      },
+      {
+        "path": "python/auto_research/maintenance_cli.py",
+        "size": 5888,
+        "mode": 420
+      },
+      {
+        "path": "python/auto_research/memory_store.py",
+        "size": 94124,
+        "mode": 420
+      },
+      {
+        "path": "python/auto_research/migration.py",
+        "size": 26777,
+        "mode": 420
+      },
+      {
+        "path": "python/auto_research/native_store.py",
+        "size": 75648,
+        "mode": 420
+      },
+      {
+        "path": "python/auto_research/publication_display.py",
+        "size": 3533,
+        "mode": 420
+      },
+      {
+        "path": "python/auto_research/query_store.py",
+        "size": 24082,
+        "mode": 420
+      },
+      {
+        "path": "python/auto_research/schema5.py",
+        "size": 4896,
+        "mode": 420
+      },
+      {
+        "path": "python/auto_research/schema6.py",
+        "size": 905,
+        "mode": 420
+      },
+      {
+        "path": "python/auto_research/schema7.py",
+        "size": 7986,
+        "mode": 420
+      },
+      {
+        "path": "python/auto_research/schema8.py",
+        "size": 1735,
+        "mode": 420
+      },
+      {
+        "path": "python/auto_research/schema9.py",
+        "size": 1933,
+        "mode": 420
+      },
+      {
+        "path": "python/auto_research/service.py",
+        "size": 69868,
+        "mode": 420
+      },
+      {
+        "path": "python/auto_research/workbench_read.py",
+        "size": 20427,
+        "mode": 420
+      },
+      {
+        "path": "python/auto_research/workflow_store.py",
+        "size": 27269,
+        "mode": 420
+      },
+      {
+        "path": "research.presentation.template.json",
+        "size": 667,
+        "mode": 420
+      },
+      {
+        "path": "roles.js",
+        "size": 1947,
+        "mode": 420
+      },
+      {
+        "path": "scripts/build-client.mjs",
+        "size": 3396,
+        "mode": 420
+      },
+      {
+        "path": "scripts/sync-python.mjs",
+        "size": 928,
+        "mode": 420
+      },
+      {
+        "path": "scripts/validate-presentation.py",
+        "size": 1372,
+        "mode": 420
+      },
+      {
+        "path": "session-adapter.js",
+        "size": 1354,
+        "mode": 420
+      },
+      {
+        "path": "tool-definition.js",
+        "size": 2601,
+        "mode": 420
+      },
+      {
+        "path": "tools.js",
+        "size": 20918,
+        "mode": 420
+      }
+    ],
+    "entryCount": 55,
+    "bundled": []
+  }
+]
