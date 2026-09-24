@@ -1,6 +1,6 @@
 # Auto Research v5 · DSH 原生研究插件
 
-当前交付为 **0.6.9 / schema 9**。用户照常使用自己的 DSH 模型、原生工具、权限、会话和轨迹。插件提供：
+当前交付为 **0.6.10 / schema 9**。用户照常使用自己的 DSH 模型、原生工具、权限、会话和轨迹。插件提供：
 - 显式有向研究图、长期知识、阶段材料；
 - 持久节点核心 Agent、节点内专家；
 - 用量覆盖观察和历史接手；
@@ -17,7 +17,7 @@
 最短使用路径：
 
 ```bash
-dsh plugin --profile web add apps/dsh/plugin/auto-research-v5-0.6.9.tgz --offline
+dsh plugin --profile web add apps/dsh/plugin/auto-research-v5-0.6.10.tgz --offline
 dsh web
 ```
 
