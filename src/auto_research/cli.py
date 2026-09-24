@@ -21,6 +21,15 @@ def parser() -> argparse.ArgumentParser:
     app.add_argument("-p", "--project", type=Path, default=Path.cwd())
     app.add_argument("--json", action="store_true", help="Machine-readable output")
     commands = app.add_subparsers(dest="command", required=True)
+    migration = commands.add_parser(
+        "migration", help="Read-only migration preflight and recovery preview"
+    )
+    migration.add_argument(
+        "action", choices=["preflight", "dry-run", "recovery-preview", "migrate-copy"]
+    )
+    migration.add_argument("--attempt")
+    migration.add_argument("--destination", type=Path)
+    migration.add_argument("--no-files", action="store_true")
     gui = commands.add_parser("gui", help="Open the graphical research workbench")
     gui.add_argument("--workspace", type=Path, default=Path.home() / "work" / "research")
     gui.add_argument("--port", type=int, default=0)
@@ -88,6 +97,19 @@ def _json_file(path: Path):
 
 
 def execute(args):
+    if args.command == "migration":
+        from .migration import migrate_copy, preflight, recovery_preview
+        from .service import redact
+
+        if args.action == "recovery-preview":
+            if not args.attempt:
+                raise ValueError("recovery-preview requires --attempt")
+            return redact(recovery_preview(args.project, args.attempt))
+        if args.action == "migrate-copy":
+            if not args.destination:
+                raise ValueError("migrate-copy requires --destination")
+            return redact(migrate_copy(args.project, args.destination))
+        return redact(preflight(args.project, files=not args.no_files))
     if args.command == "gui":
         from .gui import serve_gui
 
@@ -231,7 +253,12 @@ def main(argv=None):
         raise SystemExit(2)
     if result is None:
         return
-    if args.json or not isinstance(result, dict) or "project" not in result:
+    if (
+        args.command == "migration"
+        or args.json
+        or not isinstance(result, dict)
+        or "project" not in result
+    ):
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:
         config = result["project"]["config"]

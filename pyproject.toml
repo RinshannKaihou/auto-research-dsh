@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "auto-research-graph"
-version = "0.1.0"
-description = "Persistent, branching research with inspectable partial work"
+version = "0.6.10"
+description = "Research state and offline migration for the native DSH plugin"
 requires-python = ">=3.11"
 dependencies = []
 
@@ -14,7 +14,7 @@ dev = ["pytest>=8", "coverage>=7", "black>=24"]
 browser-test = ["playwright"]
 
 [project.scripts]
-ari = "auto_research.cli:main"
+ari = "auto_research.maintenance_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -23,7 +23,15 @@ where = ["src"]
 auto_research = ["assets/*.html"]
 
 [tool.setuptools.data-files]
-"share/auto-research/dsh" = ["apps/dsh/worker.mjs"]
+"share/auto-research/dsh/plugin" = [
+  "apps/dsh/plugin/package.json", "apps/dsh/plugin/cordis.patch.yml",
+  "apps/dsh/plugin/index.js", "apps/dsh/plugin/client.js",
+  "apps/dsh/plugin/ipc.js", "apps/dsh/plugin/session-adapter.js",
+  "apps/dsh/plugin/domain.js", "apps/dsh/plugin/commands.js",
+  "apps/dsh/plugin/tools.js", "apps/dsh/plugin/tool-definition.js",
+  "apps/dsh/plugin/events.js", "apps/dsh/plugin/roles.js",
+  "apps/dsh/plugin/README.md",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

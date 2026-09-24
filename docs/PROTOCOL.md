@@ -1,45 +1,29 @@
-# v0.1 研究与执行协议
+# DSH 原生研究协议（schema 2）
 
-## 研究节点
+## 生命周期
 
-节点状态仅 `proposed → open → closed`。open 表示一段工作开始；closed 表示材料已经固定并交接，不表示问题解决。一段工作可以零实验、空 findings，失败和未完成的推导都可作为 products 保存。
+一个项目包含多个 DSH 会话关联区间。关联区间包含研究工作段；工作段可聚焦节点，也可执行无节点的规划。一个工作段跨多个原生 turn。工作段结束、节点关闭和原生 goal 完成互不推断。
 
-`question / why_now / plan / inputs[{ref,use}]` 说明目的和来源。问题编号取自版本化议程。执行开始时再次检查当前议程，并记录采用的议程/笔记版本。
+运行中请求 focus 只登记下一工作段。每轮开始时，插件把关联区间、attempt 和 node 固定到该 turn；模型请求开始时再次固定用量归属。当前 focus 后续变化不会移动迟到回执或费用。
 
-结果包含：
+默认 control 是 `manual`。`auto` 只表示允许插件拥有的原生 goals 续轮。项目 pause 阻止所有插件 goals 后续续轮；人工消息只暂停当前会话。用量和未知用量只记录和展示，不改变 control。存储失联会暂停插件拥有的自主 goal，手动消息仍由 DSH 正常处理。
 
-- `close_reason`：本次为什么结束。
-- `products`：编号、相对工作区路径、用途/接口、`partial|usable`、缺口。归档路径、内容摘要及完整版本由程序生成。
-- `findings`：可空；每条有编号、正文、适用条件及 evidence。`#draft` 指本次产品；`X-001/result#draft` 指已发布材料。不能让两个没有材料的本地 finding 相互引用自证。
-- `revises`：可选，指向已有 finding。只登记后续修订，保留旧记录；不自动撤销下游结论。
-- `limitations / next`：未决条件与可继续的工作。
+## 节点、publication 和关系
 
-跨节点引用只能指向已关闭节点的固定结果。引用半成品合法。汇聚是多输入节点；研究回访创建新节点，不修改旧结果。来源关系的时间顺序不限制反复探索同一问题。
+节点状态为 `proposed|open|closed`，并保存问题、当前理由、计划、固定 inputs、用途和 `continue|redirect|anchor` 策略。`anchor` 必须引用已存在的历史节点、publication item 或 legacy ref。
 
-## 状态、文件与权限
+publication 状态为 `partial|complete`。它可以没有实验、没有 findings 或没有文件；summary 和 gaps 清楚说明阶段状态。发布不会自动关闭节点。同一节点能产生多个 publication；引用 `pub/P-001#draft` 永久指向该次发布的 item。
 
-`.research/state.sqlite3` 是元数据唯一权威源。报告、推导和代码是文件；`.research/objects` 中的固定内容使用完整 SHA-256。目录摘要包含名称、类型和文件内容；不接受 symlink、特殊文件或 Git 元数据。执行时复制到各自 workspace 的 inputs，续写使用私有副本。
+有 `source_path` 的 item 先固定到 `.research/objects/<sha256>`，再写 intent，最后提交 SQLite。回执丢失后相同 operation ID 复用已经固定的 bytes。`research_relate` 只记录结构和理由，不判定科学真假。
 
-归档先完成文件准备和校验，数据库事务随后登记并关闭节点。掉电可能留下未引用文件，不允许数据库引用尚未完成的归档。节点卡和索引是导出视图，可重新生成；不能从这些视图恢复预算账本。
+## 工作副本和接手
 
-交互式研究地图同样是只读视图：实线沿 `inputs` 从来源指向使用者，虚线沿 `revises` 从旧发现所在节点指向修订者。同一对节点可存在两种关系。上下游表示结构上的可达关系，不表示科学上的独立性、正确性或必然影响。原发现保留，不能由修订连线自动判为失效。图中“已归档”仅对应 closed；执行异常另外显示。
+分支节点的固定输入物化到 `workspaces/branch-*/inputs/`；可写工作放在 `scratch/` 和 `output/`。同一 item 名在不同 publication 中有不同 ref 和不同副本。content-only item 进入 `research-inputs.json` 索引。
 
-Worker 只能读授权材料，不能访问数据库或其他作业的控制文件；提交经宿主进程导入。`modifies_artifact=false` 仍可写探针、分析、报告和其他私有产物；只有允许修改目标代码的节点会获得目标 worktree。
+快照只接收项目内明确路径，排除 `.research`、`.git` 和疑似凭据。部分固定失败会保存 `complete=false` 和每项错误。接手要求来源 attempt 已明确 finished/stopped；active 或 unknown 时拒绝创建冲突副本。执行接手创建新 cwd 和新 DSH 会话，旧记录保持不变。
 
-DSH 文件工具检查真实路径，shell 由 macOS Seatbelt 执行边界。POSIX 只读位和事后哈希检查只是额外检查，不替代后端隔离。
+## 用量和恢复
 
-## 执行与费用
+每个原生 LLM 请求只有一个 observation；结束或晚到修正写追加 adjustment。`actual`、`estimated` 和 `unknown` 不互相伪装。统计结果不作为创建、续轮、恢复或派发的准入条件。
 
-一个节点可以有多次执行尝试。尝试状态包括 reserved、running、unknown、completed、failed、interrupted；终止状态不自动关闭研究节点。新 agent 可以接手之前的文件和 progress.json，不能偷偷把旧尝试重新标为 running。
-
-领取与预算预占在一个事务中，同一节点最多一个活跃尝试。请求编号保证重复提交不产生第二次操作；相同编号配不同内容会拒绝。程序在派发前记录执行编号，后台 supervisor 保存进程身份、日志、心跳、终态及后端用量。
-
-重启先收集可确认完成的作业、核实存活作业；无法确认时标为 unknown 并暂停。没有收到结果不等于没有执行。取消请求的回执不等于子进程已经停止；终态发布前清理受管进程组。进程身份用 PID 和出生时间，不依赖会因 exec 改变的命令名称。
-
-计费区分实际、估计和未知；协调者也在账内。未知费用不会变为零，实际超额如实记录。预算是准入与记账机制，不能保证模型供应商在精确 token 点停止。
-
-## 协调方式与范围
-
-一个本地协调者持有排他锁。协调者提出有限数量探索，程序按并发和预算派发；出现新的已发布材料或人工调整后重新决策。一条分支完成即可继续，不等待全批。没有下一步建议时暂停，不自动宣称问题已解。
-
-v0.1 不实现多机调度、自动科学真值判定、复杂主张状态机、科学独立性计算或自动代码合并。运行中的可变产物不能跨节点引用；要共享阶段进展，结束当前阶段并发布半成品。
+冷恢复不自动武装 goal，不重放没有工具结果的命令。schema-1 项目只能迁移到新副本，迁移保留原库一致备份、旧 ref 和旧 aggregate usage 来源键。

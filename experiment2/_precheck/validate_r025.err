@@ -1,6 +1,0 @@
-[transformers] PyTorch was not found. Models won't be available and only tokenizers, configuration and file/data utilities can be used.
-Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
-real 136.46
-user 130.32
-sys 3.30
-exit=0

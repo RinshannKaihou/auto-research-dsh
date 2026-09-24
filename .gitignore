@@ -10,3 +10,5 @@ dist/
 workspaces/
 
 /migration-baselines/
+/apps/dsh/plugin/python/
+/apps/dsh/plugin/*.tgz

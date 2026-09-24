@@ -152,6 +152,12 @@ class Store:
     def _connection(self) -> Iterator[sqlite3.Connection]:
         db = sqlite3.connect(self.db_path, timeout=30, isolation_level=None)
         db.row_factory = sqlite3.Row
+        version = db.execute("PRAGMA user_version").fetchone()[0]
+        if version > 1:
+            db.close()
+            raise ValidationError(
+                f"Schema {version} requires the native DSH service; legacy Store supports at most 1"
+            )
         db.execute("PRAGMA foreign_keys=ON")
         db.execute("PRAGMA busy_timeout=30000")
         db.execute("PRAGMA synchronous=FULL")

@@ -1,3 +1,3 @@
-from .cli import main
+from .maintenance_cli import main
 
 main()
