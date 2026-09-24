@@ -1,5 +1,5 @@
 /** Small, safe Markdown fallback for DSH builds without a public MarkdownText export. */
-export function renderResearchMarkdown(React, source) {
+export function renderResearchMarkdown(React, source, {proseHeadings=false}={}) {
   const h=React.createElement, lines=String(source??'').replace(/\r\n?/g,'\n').split('\n'), blocks=[];
   const inline=value=>String(value).split(/(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\)|\*[^*]+\*)/g).filter(Boolean).map((part,index)=>{
     if(part.startsWith('**')&&part.endsWith('**'))return h('strong',{key:index},part.slice(2,-2));
@@ -23,7 +23,7 @@ export function renderResearchMarkdown(React, source) {
       blocks.push(h('pre',{key,className:'ari-md-code'},h('code',{'data-language':lang},code.join('\n'))));continue;
     }
     const heading=line.match(/^\s*(#{1,6})\s+(.+)$/);
-    if(heading){blocks.push(h(`h${Math.min(heading[1].length,4)}`,{key},...inline(heading[2])));i++;continue;}
+    if(heading){const tag=proseHeadings?(heading[2].length>120?'p':'h4'):`h${Math.min(heading[1].length,4)}`;blocks.push(h(tag,{key},...inline(heading[2])));i++;continue;}
     if(/^\s*---+\s*$/.test(line)){blocks.push(h('hr',{key}));i++;continue;}
     if(line.includes('|')&&i+1<lines.length&&tableRule(lines[i+1])){
       const headers=cells(line),rows=[];i+=2;

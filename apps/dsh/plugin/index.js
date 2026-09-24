@@ -94,6 +94,7 @@ export function apply(ctx, config = {}) {
         if (endpoint === 'changes.page') {
           return { ok: true, value: await domain.page(agent, 'changes', payload.cursor ?? {}, payload.limit ?? 50) };
         }
+        if (endpoint === 'reference.chunk') return {ok:true,value:await domain.lookup(agent,{ref:payload.ref,offset:payload.offset??0,limit:32768})};
         if (endpoint === 'reference.get') {
           return { ok: true, value: await domain.lookup(agent, { ref: payload.ref }) };
         }

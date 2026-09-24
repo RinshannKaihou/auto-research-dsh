@@ -1210,6 +1210,7 @@ class NativeService:
                     operation_id,
                     request.get("knowledge_refs", []),
                     asserted_at=self._asserted_at(store, request, host_id, session_id),
+                    display=request.get("display"),
                 )
             elif method == "relate":
                 value = store.relate(

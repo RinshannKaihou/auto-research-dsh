@@ -240,10 +240,19 @@ export function registerResearchTools(ctx, domain) {
     tool(domain, {
       name: 'research_publish',
       method: 'publish',
-      description: 'Publish an immutable partial or complete stage. Zero-experiment and empty-findings publications are valid.',
+      description: 'Publish an immutable partial or complete stage. Zero-experiment and empty-findings publications are valid. When possible include display: a short title, overview and grouped points in the research goal language; distinguish findings, untested hypotheses and limitations. Keep the detailed account in summary/report; do not call another model to format it. Display is optional for compatibility.',
       parameters: {
         status: { type: 'string', required: true, enum: ['partial', 'complete'] },
         summary: { type: 'string', required: true },
+        display: { type: 'object', properties: {
+          title: { type: 'string', required: true, description: 'Short plain-text title, at most 80 characters.' },
+          overview: { type: 'string', required: true, description: 'Brief plain-text summary, at most 400 characters.' },
+          sections: { type: 'array', description: 'At most 4 groups; separate results, hypotheses and limitations as appropriate.', items: {type:'object',properties:{
+            heading: {type:'string',required:true,description:'At most 80 characters.'},
+            items: {type:'array',required:true,description:'1–4 plain-text points, each at most 240 characters.',items:{type:'string'}},
+          }}},
+          primary_item_id: { type:'string', description:'Optional item_id of a file report in this publication; never an inferred prose path.' },
+        }},
         gaps: { type: 'array', items: { type: 'string' } },
         items: {
           type: 'array',

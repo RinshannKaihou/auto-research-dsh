@@ -924,7 +924,7 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
         items: list[dict],
         request_id: str,
         knowledge_refs: list[str] | None = None,
-        *, asserted_at: dict | None = None,
+        *, asserted_at: dict | None = None, display: dict | None = None,
     ) -> dict:
         if status not in {"partial", "complete"}:
             raise ValidationError("publication status must be partial or complete")
@@ -955,6 +955,14 @@ class NativeStore(QueryStore, MemoryStore, WorkflowStore):
                     "knowledge_refs": _copy(raw.get("knowledge_refs", [])),
                 }
             )
+        if display is not None:
+            from .publication_display import DISPLAY_ID, DISPLAY_KIND, normalize_display
+            if DISPLAY_ID in seen or any(item["kind"] == DISPLAY_KIND for item in normalized):
+                raise ValidationError("Reserved publication display item conflicts with supplied items")
+            normalized.append({"item_id": DISPLAY_ID, "kind": DISPLAY_KIND,
+                               "content": normalize_display(display, normalized),
+                               "object_version": None, "object_kind": None,
+                               "source_path": None, "knowledge_refs": []})
         payload = {
             "host_id": host_id,
             "session_id": session_id,

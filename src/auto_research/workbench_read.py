@@ -18,6 +18,7 @@ from typing import Any
 from . import frozen_refs
 from .artifacts import _open_source
 from .errors import ValidationError
+from .publication_display import project_publication
 
 
 PREVIEW_LIMIT = 2 * 1024 * 1024
@@ -47,6 +48,7 @@ def summary(store, host_id: str, session_id: str) -> dict:
             "SELECT publication_id,summary,status,node_id FROM publications "
             "ORDER BY rowid DESC LIMIT 1"
         ).fetchone()
+        final = project_publication(db, dict(final)) if final else None
     workflow = state.get("workflow", {})
     return {
         "schema_version": state["schema_version"],
@@ -57,7 +59,7 @@ def summary(store, host_id: str, session_id: str) -> dict:
         "run": workflow.get("run", {}),
         "session": workflow.get("session"),
         "attempt": state.get("attempt"),
-        "final_publication": dict(final) if final else None,
+        "final_publication": final,
     }
 
 
@@ -72,7 +74,7 @@ _PAGE_TABLES = {
     "review_todos": ("review_todos", "todo_id", ("todo_id", "node_id", "state", "trigger_kind", "trigger_ref")),
     "checkpoints": ("node_checkpoints", "checkpoint_id", ("checkpoint_id", "node_id", "revision", "created_at")),
     "snapshots": ("snapshots", "snapshot_id", ("snapshot_id", "attempt_id", "complete", "created_at")),
-    "specialists": ("specialist_tasks", "task_id", ("task_id", "node_id", "state", "purpose", "child_session_id")),
+    "specialists": ("specialist_tasks", "task_id", ("task_id", "node_id", "state", "purpose", "label", "parent_session_id", "child_session_id")),
     "restorations": ("restorations", "restoration_id", ("restoration_id", "snapshot_id", "source_attempt_id", "target_attempt_id")),
 }
 
@@ -111,19 +113,25 @@ def page(store, collection: str, *, after: int = 0, upper_id: int | None = None,
             "ORDER BY rowid LIMIT ?", params + [limit + 1]
         ))
         visible = [dict(row) for row in rows[:limit]]
+        if collection == "sessions" and visible:
+            ids = [item["session_id"] for item in visible]
+            task_rows = db.execute(
+                "SELECT task_id,node_id,label,purpose,state,parent_session_id,child_session_id "
+                f"FROM specialist_tasks WHERE child_session_id IN ({','.join('?' for _ in ids)}) ORDER BY rowid",
+                ids,
+            )
+            tasks = {row["child_session_id"]: dict(row) for row in task_rows}
+            for item in visible:
+                task = tasks.get(item["session_id"])
+                if task:
+                    item.update(role="specialist", node_id=task["node_id"] or item["node_id"],
+                                task_id=task["task_id"], label=task["label"], purpose=task["purpose"],
+                                specialist_state=task["state"], parent_session_id=task["parent_session_id"])
         if collection == "publications":
             for record in visible:
-                record["items"] = [
-                    {"ref": f"pub/{record['publication_id']}#{item['item_id']}",
-                     "item_id": item["item_id"], "kind": item["kind"],
-                     "source_path": item["source_path"], "object_kind": item["object_kind"]}
-                    for item in db.execute(
-                        "SELECT item_id,kind,source_path,object_kind FROM publication_items "
-                        "WHERE publication_id=? ORDER BY item_id", (record["publication_id"],)
-                    )
-                ]
+                project_publication(db, record)
     for item in visible:
-        for key in ("question", "summary", "note", "error", "purpose"):
+        for key in ("question", "summary", "note", "error", "purpose", "label"):
             if key in item:
                 item[key] = _short(item[key], 240)
     return {"collection": collection, "items": visible, "total": total, "upper_id": upper_id,
